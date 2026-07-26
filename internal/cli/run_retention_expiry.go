@@ -62,6 +62,17 @@ func keptSessionSweepRepoDirs(repoDir string, repoRoot string) ([]string, []stri
 }
 
 func sweepKeptSessions(repoDir string, hostID string, now time.Time) []string {
+	var warnings []string
+	if err := withRunRetentionLock(repoDir, func() error {
+		warnings = sweepKeptSessionsUnlocked(repoDir, hostID, now)
+		return nil
+	}); err != nil {
+		return []string{fmt.Sprintf("lock kept-session expiry mutations for host %s: %v", hostID, err)}
+	}
+	return warnings
+}
+
+func sweepKeptSessionsUnlocked(repoDir string, hostID string, now time.Time) []string {
 	runs, err := listKeptRuns(repoDir)
 	if err != nil {
 		return []string{fmt.Sprintf("sweep kept sessions for host %s: %v", hostID, err)}
@@ -74,6 +85,19 @@ func sweepKeptSessions(repoDir string, hostID string, now time.Time) []string {
 		if run.Record.LegacyMissingRecord {
 			warnings = append(warnings, fmt.Sprintf("kept run %s on host %s has no Run Record; refusing expiry cleanup", run.RunID, hostID))
 			continue
+		}
+		if run.Record.HardDeadline == "" {
+			stampKeptSessionHardDeadline(&run.Record, now)
+			if keep, keepErr := time.Parse(time.RFC3339Nano, run.Record.KeepDeadline); keepErr == nil {
+				hard, _ := time.Parse(time.RFC3339Nano, run.Record.HardDeadline)
+				if keep.After(hard) {
+					run.Record.KeepDeadline = run.Record.HardDeadline
+				}
+			}
+			if err := writeRunRetentionRecord(runContext{StateDir: run.StateDir}, run.Record); err != nil {
+				warnings = append(warnings, fmt.Sprintf("stamp Host Lock hard-lifetime grace for run %s on host %s: %v", run.RunID, hostID, err))
+				continue
+			}
 		}
 		if run.Record.KeepDeadline == "" {
 			stampKeptSessionDeadline(&run.Record, now, keepTTLFromRecord(run.Record, defaultKeepTTL))

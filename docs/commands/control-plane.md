@@ -9,7 +9,9 @@ maya-stall control-plane serve \
   --listen 127.0.0.1:8443 \
   --data-dir /var/lib/maya-stall/control-plane \
   --tls-cert /etc/maya-stall/tls.crt \
-  --tls-key /etc/maya-stall/tls.key
+  --tls-key /etc/maya-stall/tls.key \
+  --host-lock-idle-timeout 30m \
+  --host-lock-hard-lifetime 6h
 ```
 
 `--data-dir`, `--tls-cert`, and `--tls-key` are required. The listen address
@@ -17,6 +19,14 @@ defaults to `127.0.0.1:8443`. `--token-env` selects another environment
 variable name; the token value is never accepted as a command argument or Repo
 Run Config field. TLS certificate/key paths must be regular files, not
 symlinks.
+
+Every durable Host Lock receives an idle deadline and hard lifetime. Defaults
+are 30 minutes idle and 6 hours total. The two optional flags above accept
+positive Go durations, the idle timeout must be at least 30 seconds (twice the
+fixed 15-second Agent heartbeat interval), and the hard lifetime must exceed
+the idle timeout.
+Active Run Ledger progress and Agent heartbeats move the idle deadline, capped
+by the unchanged hard deadline.
 
 The server creates a missing data directory privately. It never changes an
 existing directory's permissions; an existing root must already be private
@@ -49,7 +59,10 @@ the submitted Target Profile. Registration issues a leased, ephemeral process-se
 fence; heartbeats renew it during execution, concurrent live processes using
 the same Agent identity are rejected, and a replacement may take over only
 after the prior lease expires and before execution confirmation. Loss after
-confirmation quarantines the assignment. New assignments require an Agent that
+confirmation leaves the durable assignment reserved only until its Host Lock
+idle deadline. Any later Control Plane request marks the lock `expiring`; a
+replacement Agent receives cleanup work instead of execution work. New
+assignments require an Agent that
 advertises exact Maya UI Session binding during registration. Older version 1
 Agents remain protocol-compatible for already-active assignments but are not
 eligible for new work after reconnecting. The Control
@@ -57,6 +70,9 @@ Plane atomically persists the assignment and a unique
 token-fenced Host Lock before making work visible. A Host has one slot. A
 second assignment fails without changing the existing lock or assignment.
 Restarted Control Planes reload active locks and keep their Hosts unavailable.
+Registration explicitly negotiates `deadlineActions`; older Agents that omit it
+cannot receive new assignments or `cleanup` actions and therefore cannot
+mistake deadline recovery for Scenario execution.
 An unverified Maya shutdown moves the assignment to `quarantined`; its Agent
 and shared Host Locks remain unavailable. Version 1 has no automated
 quarantine recovery endpoint; this is an intentional fail-closed boundary.
@@ -92,6 +108,8 @@ The version 1 API uses bearer authentication and origin-only HTTPS client URLs:
 - `GET /v1/runs/<run-id>/logs`
 - `GET /v1/runs/<run-id>/result`
 - `GET /v1/runs/<run-id>/evidence`
+- `POST /v1/runs/<run-id>/extend`
+- `POST /v1/runs/<run-id>/cancel`
 - `POST /v1/host-agents/enroll`
 - `GET /v1/host-agents/<agent-id>/status`
 - `POST /v1/host-agents/<agent-id>/register`
@@ -100,6 +118,8 @@ The version 1 API uses bearer authentication and origin-only HTTPS client URLs:
 - `POST /v1/host-agents/<agent-id>/assignments/<run-id>/confirm`
 - `POST /v1/host-agents/<agent-id>/assignments/<run-id>/session`
 - `POST /v1/host-agents/<agent-id>/assignments/<run-id>/progress`
+- `POST /v1/host-agents/<agent-id>/assignments/<run-id>/kept`
+- `POST /v1/host-agents/<agent-id>/assignments/<run-id>/action`
 - `POST /v1/host-agents/<agent-id>/assignments/<run-id>/complete`
 - `POST /v1/host-agents/<agent-id>/assignments/<run-id>/fail`
 
@@ -129,18 +149,31 @@ submission receives HTTP `429` before Run acceptance and leaves no Run state.
 During execution, the Agent sends
 bounded token-, session-, and Host-Lock-fenced Run Ledger checkpoints so a
 later client can observe the same event identities before terminal transfer.
-Registered Agent runs require
-`--stop-after always`; policies that could retain a session fail before an
-assignment is created. Real execution requires an Agent-local Host config;
+Those checkpoints and Agent heartbeats update the durable Host Lock sign of
+life. Every request opportunistically enforces idle, hard, and kept-session
+deadlines independently of the original submitting CLI.
+
+Registered Agent runs support retaining Stop Policies. A Kept Session keeps the
+same token-fenced Host Lock, reports `keepDeadline` and `keepRemaining`, and
+waits for explicit stop or expiry. `extend --control-plane ... --by <duration>`
+uses operator bearer authentication and may not move the keep deadline beyond
+the Host Lock hard deadline. Expiry directs the Agent to verify the retained
+Run ID and exact Broker session identity, stop only that Maya UI Session, clean
+run-owned state, transfer deadline events, and release the Host Lock. A matching
+already-stopped session is idempotent; a changed session is never stopped and
+the assignment fails closed.
+
+Real execution requires an Agent-local Host config;
 submitting clients cannot send Host config or silently fall back to
 embedded/direct-SSH ownership.
 
 Queued Runs expose position and wait metadata through status and retain the
 same bounded ordered event identity through Agent execution. Authenticated
-`stop --control-plane` cancels a queued Run without Host mutation; cancellation
-is rejected once dispatch begins.
+`stop --control-plane` cancels a queued Run without Host mutation or explicitly
+releases a Kept Session through its Agent. Other assigned active Runs reject
+the request.
 
 Completed Run IDs remain readable through history, events, logs, result,
 Evidence metadata, and cleanup state. Active Evidence is unavailable until its
-bundle is durable. Configured attach is observational; assigned-run stop and
-run-scoped desktop mutations remain later capabilities.
+bundle is durable. Configured attach is observational; active run-scoped
+desktop mutations remain a later capability.

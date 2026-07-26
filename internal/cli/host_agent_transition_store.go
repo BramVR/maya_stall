@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"time"
 )
 
 // hostAgentTransitionStore is the durability seam for assignment state. A
@@ -88,7 +90,7 @@ func (store hostAgentTransitionStore) verify(want hostAgentAssignmentRecord) err
 	if err := readPrivateJSON(store.assignmentPath(want.RunID), &assignment); err != nil {
 		return err
 	}
-	if assignment.State != want.State || assignment.AgentID != want.AgentID || assignment.HostID != want.HostID || !sameLockToken(assignment.LockToken, want.LockToken) || assignment.SessionBindingRequired != want.SessionBindingRequired || !sameBrokerSession(assignment.BrokerSession, want.BrokerSession) {
+	if assignment.State != want.State || assignment.AgentID != want.AgentID || assignment.HostID != want.HostID || !sameLockToken(assignment.LockToken, want.LockToken) || assignment.hostLockDeadlines != want.hostLockDeadlines || assignment.ExpiryFromState != want.ExpiryFromState || assignment.ExpiryReason != want.ExpiryReason || !slices.Equal(assignment.DeadlineEvents, want.DeadlineEvents) || assignment.SessionBindingRequired != want.SessionBindingRequired || !sameBrokerSession(assignment.BrokerSession, want.BrokerSession) {
 		return fmt.Errorf("durable Host Agent assignment does not match transition")
 	}
 	ledgerStore := newRunLedgerStore(store.runRepoDir(want.RunID))
@@ -109,29 +111,39 @@ func (store hostAgentTransitionStore) verify(want hostAgentAssignmentRecord) err
 	if err := readPrivateJSON(store.hostLockPath(want.HostID), &lock); err != nil {
 		return err
 	}
-	if lock.State != want.State || lock.RunID != want.RunID || lock.AgentID != want.AgentID || !sameLockToken(lock.LockToken, want.LockToken) || lock.SessionBindingRequired != want.SessionBindingRequired || !sameBrokerSession(lock.BrokerSession, want.BrokerSession) {
+	if lock.State != want.State || lock.RunID != want.RunID || lock.AgentID != want.AgentID || !sameLockToken(lock.LockToken, want.LockToken) || lock.hostLockDeadlines != want.hostLockDeadlines || lock.ExpiryFromState != want.ExpiryFromState || lock.ExpiryReason != want.ExpiryReason || lock.SessionBindingRequired != want.SessionBindingRequired || !sameBrokerSession(lock.BrokerSession, want.BrokerSession) {
 		return fmt.Errorf("durable Host Lock does not match transition")
 	}
-	if want.AssignedLedger == nil {
-		return fmt.Errorf("active Host Agent transition is missing its assigned Run Ledger")
-	}
-	live, err := ledgerStore.Read(want.RunID)
-	if err != nil || live.Host != want.HostID || live.AcceptedAt != want.AssignedLedger.AcceptedAt {
-		return errors.Join(fmt.Errorf("active Host Agent transition did not publish its assigned Run Ledger"), err)
+	if want.AssignedLedger != nil {
+		live, err := ledgerStore.Read(want.RunID)
+		if err != nil || live.Host != want.HostID || live.AcceptedAt != want.AssignedLedger.AcceptedAt {
+			return errors.Join(fmt.Errorf("active Host Agent transition did not publish its assigned Run Ledger"), err)
+		}
 	}
 	return nil
 }
 
 func (store hostAgentTransitionStore) apply(record hostAgentAssignmentRecord) error {
 	ledgerStore := newRunLedgerStore(store.runRepoDir(record.RunID))
-	if record.State == "completed" {
-		if err := store.SaveAssignment(record); err != nil {
-			return err
+	var eventTime time.Time
+	if len(record.DeadlineEvents) > 0 {
+		var err error
+		eventTime, err = time.Parse(time.RFC3339Nano, record.DeadlineEvents[len(record.DeadlineEvents)-1].Timestamp)
+		if err != nil {
+			return fmt.Errorf("invalid Host Lock deadline event timestamp: %w", err)
 		}
+	}
+	if record.State == "completed" {
 		if record.TerminalLedger == nil {
 			return fmt.Errorf("completed Host Agent transition is missing its terminal Run Ledger")
 		}
 		if err := ledgerStore.Replace(*record.TerminalLedger); err != nil {
+			return err
+		}
+		if err := appendHostLockDeadlineEventsToLedger(store.runRepoDir(record.RunID), record.TerminalLedger, record.DeadlineEvents, eventTime); err != nil {
+			return err
+		}
+		if err := store.SaveAssignment(record); err != nil {
 			return err
 		}
 		if err := os.Remove(store.hostLockPath(record.HostID)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -139,11 +151,13 @@ func (store hostAgentTransitionStore) apply(record hostAgentAssignmentRecord) er
 		}
 		return syncRunLedgerDirectory(filepath.Join(store.dataDir, "host-locks"))
 	}
-	if record.AssignedLedger == nil {
-		return fmt.Errorf("active Host Agent transition is missing its assigned Run Ledger")
-	}
-	if err := ledgerStore.Replace(*record.AssignedLedger); err != nil {
-		return err
+	if record.AssignedLedger != nil {
+		if err := ledgerStore.Replace(*record.AssignedLedger); err != nil {
+			return err
+		}
+		if err := appendHostLockDeadlineEventsToLedger(store.runRepoDir(record.RunID), record.AssignedLedger, record.DeadlineEvents, eventTime); err != nil {
+			return err
+		}
 	}
 	if err := store.persistHostLock(record, record.State); err != nil {
 		return err
@@ -155,6 +169,9 @@ func (store hostAgentTransitionStore) persistHostLock(assignment hostAgentAssign
 	return writePrivateJSON(store.hostLockPath(assignment.HostID), hostAgentLockRecord{
 		Version: hostAgentAPIVersion, RunID: assignment.RunID, AgentID: assignment.AgentID, HostID: assignment.HostID,
 		LockToken: assignment.LockToken, State: state, CreatedAt: assignment.CreatedAt,
+		hostLockDeadlines:      assignment.hostLockDeadlines,
+		ExpiryFromState:        assignment.ExpiryFromState,
+		ExpiryReason:           assignment.ExpiryReason,
 		SessionBindingRequired: assignment.SessionBindingRequired, BrokerSession: assignment.BrokerSession,
 	})
 }

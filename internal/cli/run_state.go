@@ -25,6 +25,13 @@ type stopOptions struct {
 	ControlPlaneTokenEnv string
 }
 
+type extendOptions struct {
+	RunID                string
+	By                   time.Duration
+	ControlPlane         string
+	ControlPlaneTokenEnv string
+}
+
 type keptRun struct {
 	RunID        string
 	StateDir     string
@@ -113,24 +120,172 @@ func parseStopArgs(args []string) (stopOptions, error) {
 	return options, nil
 }
 
-func stopRunThroughMode(repoDir string, options stopOptions, runtime runRuntime) error {
+func parseExtendArgs(args []string) (extendOptions, error) {
+	var options extendOptions
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--by":
+			index++
+			if index >= len(args) || args[index] == "" || strings.HasPrefix(args[index], "--") {
+				return extendOptions{}, newUsageError("--by needs a duration")
+			}
+			by, err := time.ParseDuration(args[index])
+			if err != nil || by <= 0 {
+				return extendOptions{}, newUsageError("--by needs a positive duration")
+			}
+			options.By = by
+		case "--control-plane":
+			index++
+			if index >= len(args) || args[index] == "" || strings.HasPrefix(args[index], "--") {
+				return extendOptions{}, newUsageError("--control-plane needs an HTTPS URL")
+			}
+			options.ControlPlane = args[index]
+		case "--control-plane-token-env":
+			index++
+			if index >= len(args) || args[index] == "" || strings.HasPrefix(args[index], "--") {
+				return extendOptions{}, newUsageError("--control-plane-token-env needs an environment variable name")
+			}
+			options.ControlPlaneTokenEnv = args[index]
+		default:
+			if options.RunID != "" {
+				return extendOptions{}, newUsageError("extend needs one run id")
+			}
+			if err := validateRunID(args[index]); err != nil {
+				return extendOptions{}, err
+			}
+			options.RunID = args[index]
+		}
+	}
+	if options.RunID == "" {
+		return extendOptions{}, newUsageError("extend needs one run id")
+	}
+	if options.By <= 0 {
+		return extendOptions{}, newUsageError("extend needs --by <duration>")
+	}
+	if options.ControlPlane == "" && options.ControlPlaneTokenEnv != "" {
+		return extendOptions{}, newUsageError("--control-plane-token-env requires --control-plane")
+	}
+	return options, nil
+}
+
+func extendRunThroughMode(repoDir string, options extendOptions, runtime runRuntime) (string, error) {
+	now := time.Now
+	if runtime.Now != nil {
+		now = runtime.Now
+	}
+	if options.ControlPlane != "" {
+		var status controlPlaneStatusResponse
+		request := controlPlaneKeepExtensionRequest{Version: controlPlaneAPIVersion, By: options.By.String()}
+		if err := postControlPlaneJSON(options.ControlPlane, options.ControlPlaneTokenEnv, "/v1/runs/"+options.RunID+"/extend", request, runtime, http.StatusOK, &status); err != nil {
+			return "", err
+		}
+		if status.Version != controlPlaneAPIVersion || status.Kind != "status" || status.RunID != options.RunID || status.KeepDeadline == "" {
+			return "", errors.New("Control Plane did not confirm Kept Session extension") //nolint:staticcheck // Product terms preserve the user-facing diagnostic.
+		}
+		return status.KeepDeadline, nil
+	}
+	var deadline string
+	err := withRunRetentionMutationLock(repoDir, options.RunID, func() error {
+		var extendErr error
+		deadline, extendErr = extendEmbeddedKeptSession(repoDir, options, now)
+		return extendErr
+	})
+	return deadline, err
+}
+
+func extendEmbeddedKeptSession(repoDir string, options extendOptions, now func() time.Time) (string, error) {
+	run, err := readKeptRunState(repoDir, options.RunID)
+	if err != nil {
+		return "", err
+	}
+	if run.Record.KeepDeadline == "" {
+		return "", fmt.Errorf("Kept Session %s has no deadline", options.RunID) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	keep, err := time.Parse(time.RFC3339Nano, run.Record.KeepDeadline)
+	if err != nil || !now().Before(keep) {
+		return "", fmt.Errorf("Kept Session %s has expired", options.RunID) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	if run.Record.HardDeadline == "" {
+		stampKeptSessionHardDeadline(&run.Record, now())
+		hard, parseErr := time.Parse(time.RFC3339Nano, run.Record.HardDeadline)
+		if parseErr != nil {
+			return "", fmt.Errorf("Kept Session %s has invalid Host Lock hard deadline", options.RunID) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		if keep.After(hard) {
+			keep = hard
+			run.Record.KeepDeadline = hard.UTC().Format(time.RFC3339Nano)
+		}
+		if err := writeRunRetentionRecord(runContext{StateDir: run.StateDir}, run.Record); err != nil {
+			return "", err
+		}
+	}
+	hard, err := time.Parse(time.RFC3339Nano, run.Record.HardDeadline)
+	if err != nil {
+		return "", fmt.Errorf("Kept Session %s has invalid Host Lock hard deadline", options.RunID) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	extended := keep.Add(options.By)
+	if extended.After(hard) {
+		return "", fmt.Errorf("Kept Session extension exceeds Host Lock hard deadline %s", hard.UTC().Format(time.RFC3339Nano)) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	previousRecord := run.Record
+	run.Record.KeepDeadline = extended.UTC().Format(time.RFC3339Nano)
+	if err := writeRunRetentionRecord(runContext{StateDir: run.StateDir}, run.Record); err != nil {
+		return "", err
+	}
+	if err := appendKeptSessionSweepEvent(repoDir, run, now(), map[string]string{
+		"event": "kept-session-extended", "runId": options.RunID, "deadline": run.Record.KeepDeadline, "extension": options.By.String(),
+	}); err != nil {
+		rollbackErr := writeRunRetentionRecord(runContext{StateDir: run.StateDir}, previousRecord)
+		return "", errors.Join(err, rollbackErr)
+	}
+	return run.Record.KeepDeadline, nil
+}
+
+func withRunRetentionMutationLock(repoDir string, runID string, action func() error) error {
+	if err := validateRunID(runID); err != nil {
+		return err
+	}
+	return withRunRetentionLock(repoDir, action)
+}
+
+func withRunRetentionLock(repoDir string, action func() error) error {
+	relativeRoot := filepath.Join(".maya-stall", "state", "retention-locks")
+	if err := ensureOutputPathHasNoSymlinkParent(repoDir, relativeRoot); err != nil {
+		return err
+	}
+	root := filepath.Join(repoDir, relativeRoot)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	return withRunLedgerFileLock(filepath.Join(root, ".mutation.lock"), true, action)
+}
+
+func stopRunThroughMode(repoDir string, options stopOptions, runtime runRuntime) (string, error) {
 	if options.ControlPlane != "" {
 		var status controlPlaneStatusResponse
 		if err := postControlPlaneJSON(options.ControlPlane, options.ControlPlaneTokenEnv, "/v1/runs/"+options.RunID+"/cancel", struct {
 			Version int `json:"version"`
 		}{Version: controlPlaneAPIVersion}, runtime, http.StatusOK, &status); err != nil {
-			return err
+			return "", err
 		}
-		if status.Version != controlPlaneAPIVersion || status.Kind != "status" || status.RunID != options.RunID || status.State != "canceled" {
-			return errors.New("Control Plane did not confirm queued Run cancellation") //nolint:staticcheck // Product terms preserve the user-facing diagnostic.
+		if status.Version != controlPlaneAPIVersion || status.Kind != "status" || status.RunID != options.RunID || status.State != "canceled" && status.State != "expiring" {
+			return "", errors.New("Control Plane did not confirm Run stop request") //nolint:staticcheck // Product terms preserve the user-facing diagnostic.
 		}
-		return nil
+		if status.State == "expiring" {
+			return "stop-requested", nil
+		}
+		return "stopped", nil
 	}
 	now := time.Now
 	if runtime.Now != nil {
 		now = runtime.Now
 	}
-	return stopRun(repoDir, options.RunID, now)
+	if err := withRunRetentionMutationLock(repoDir, options.RunID, func() error {
+		return stopRun(repoDir, options.RunID, now)
+	}); err != nil {
+		return "", err
+	}
+	return "stopped", nil
 }
 
 func validateRunID(runID string) error {

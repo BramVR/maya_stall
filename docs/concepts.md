@@ -63,8 +63,12 @@ Broker, Maya version, Visual Evidence, Host Lock, and Scenario inputs.
 report covering Maya/Python/Session Broker versions and the Host features used
 by planning and scheduling. Incomplete or stale records never qualify.
 
-**Host Lock** - a shared claim with a unique lock token that prevents more than
-one active or kept Maya UI run from using the same Maya Host at the same time.
+**Host Lock** - a durable shared claim with a unique lock token, heartbeat,
+idle deadline, and hard deadline that prevents more than one active or kept
+Maya UI run from using the same Maya Host at the same time.
+
+**Host Lock Heartbeat** - a token-fenced active Run or Agent sign of life that
+moves the idle deadline without extending the hard lifetime.
 
 ## Run Lifecycle
 
@@ -89,7 +93,8 @@ investigation.
 **Run Attach** - read-only access to a run's events and Session Broker log via
 `maya-stall attach`.
 
-**Kept Session** - a session intentionally left open after a run for debugging.
+**Kept Session** - a session intentionally left open after a run for debugging
+until explicit stop or its durable deadline.
 
 **Stop Policy** - the cleanup rule that decides whether Maya Stall stops or
 keeps a Maya UI Session after a run.

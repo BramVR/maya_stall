@@ -293,14 +293,15 @@ func TestConfiguredStopRequiresExactCanceledStatus(t *testing.T) {
 	runID := "20260717T120000.000000000Z"
 	t.Setenv(defaultControlPlaneTokenEnv, "operator-token")
 	tests := []struct {
-		name   string
-		status controlPlaneStatusResponse
-		wantOK bool
+		name       string
+		status     controlPlaneStatusResponse
+		wantResult string
 	}{
 		{name: "empty", status: controlPlaneStatusResponse{}},
 		{name: "wrong run", status: controlPlaneStatusResponse{Version: controlPlaneAPIVersion, Kind: "status", RunID: "20260717T120001.000000000Z", State: "canceled"}},
 		{name: "not canceled", status: controlPlaneStatusResponse{Version: controlPlaneAPIVersion, Kind: "status", RunID: runID, State: "queued"}},
-		{name: "confirmed", status: controlPlaneStatusResponse{Version: controlPlaneAPIVersion, Kind: "status", RunID: runID, State: "canceled"}, wantOK: true},
+		{name: "canceled", status: controlPlaneStatusResponse{Version: controlPlaneAPIVersion, Kind: "status", RunID: runID, State: "canceled"}, wantResult: "stopped"},
+		{name: "cleanup requested", status: controlPlaneStatusResponse{Version: controlPlaneAPIVersion, Kind: "status", RunID: runID, State: "expiring"}, wantResult: "stop-requested"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -311,9 +312,13 @@ func TestConfiguredStopRequiresExactCanceledStatus(t *testing.T) {
 			defer server.Close()
 			runtime := defaultRunRuntime()
 			runtime.ControlPlaneHTTPClient = server.Client()
-			err := stopRunThroughMode(t.TempDir(), stopOptions{RunID: runID, ControlPlane: server.URL}, runtime)
-			if (err == nil) != test.wantOK {
-				t.Fatalf("configured stop error = %v, want success %t", err, test.wantOK)
+			result, err := stopRunThroughMode(t.TempDir(), stopOptions{RunID: runID, ControlPlane: server.URL}, runtime)
+			if test.wantResult == "" {
+				if err == nil {
+					t.Fatalf("configured stop result = %q, want error", result)
+				}
+			} else if err != nil || result != test.wantResult {
+				t.Fatalf("configured stop = %q, %v; want %q, nil", result, err, test.wantResult)
 			}
 		})
 	}
@@ -330,7 +335,7 @@ func TestQueueOrderingAndCompatibilityAreReevaluatedDeterministically(t *testing
 	report.TargetProfiles = []string{"default"}
 	report.TargetProfileHostPools = map[string]string{"default": "windows-maya"}
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
-	host := &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	host := &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	handler.hostAgents["agent-1"] = host
 	earlier := &controlPlaneQueuedRun{record: controlPlaneQueueRecord{RunID: "run-a", State: "queued", AcceptedAt: now.Format(time.RFC3339Nano), Submission: controlPlaneSubmission{TargetProfile: "default"}, HostPool: "windows-maya"}, done: make(chan struct{})}
 	later := &controlPlaneQueuedRun{record: controlPlaneQueueRecord{RunID: "run-b", State: "queued", AcceptedAt: now.Add(time.Second).Format(time.RFC3339Nano), Submission: controlPlaneSubmission{TargetProfile: "default"}, HostPool: "windows-maya"}, done: make(chan struct{})}
@@ -360,7 +365,7 @@ func TestQueueOrderingAndCompatibilityAreReevaluatedDeterministically(t *testing
 	}
 	host.status.State = "ready"
 	report2 := report
-	host2 := &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-2", HostID: "maya-win-02", State: "ready", Slots: 1, SessionID: "session-2", SessionBinding: true, Capabilities: report2}, sessionExpiresAt: now.Add(time.Minute)}
+	host2 := &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-2", HostID: "maya-win-02", State: "ready", Slots: 1, SessionID: "session-2", SessionBinding: true, DeadlineActions: true, Capabilities: report2}, sessionExpiresAt: now.Add(time.Minute)}
 	handler.hostAgents["agent-2"] = host2
 	selected2, _, _, release2, _ := handler.selectQueuedRun("run-b")
 	if selected2 != host2 || release2 == nil {
@@ -581,8 +586,8 @@ func TestQueueWaitReasonPrefersReadyCompatibleHost(t *testing.T) {
 	report.TargetProfiles = []string{"default"}
 	report.TargetProfileHostPools = map[string]string{"default": "windows-maya"}
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
-	handler.hostAgents["busy"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "busy", HostID: "maya-win-01", State: "locked", Slots: 1, RunID: "active", SessionID: "busy-session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
-	handler.hostAgents["ready"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "ready", HostID: "maya-win-02", State: "ready", Slots: 1, SessionID: "ready-session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	handler.hostAgents["busy"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "busy", HostID: "maya-win-01", State: "locked", Slots: 1, RunID: "active", SessionID: "busy-session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	handler.hostAgents["ready"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "ready", HostID: "maya-win-02", State: "ready", Slots: 1, SessionID: "ready-session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	queued := &controlPlaneQueuedRun{record: controlPlaneQueueRecord{RunID: "run-a", State: "queued", AcceptedAt: now.Format(time.RFC3339Nano), Submission: controlPlaneSubmission{TargetProfile: "default"}, HostPool: "windows-maya"}}
 	for range 100 {
 		if reason := handler.queueWaitReasonLocked(queued); reason != "awaiting-host-assignment" {
@@ -773,7 +778,7 @@ func TestQueueAdmissionSerializesAcceptanceThroughDurableInsertion(t *testing.T)
 	report.TargetProfiles = []string{"default"}
 	report.TargetProfileHostPools = map[string]string{"default": "windows-maya"}
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
-	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "locked", Slots: 1, SessionID: "session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "locked", Slots: 1, SessionID: "session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 
 	firstEntered := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -854,7 +859,7 @@ func TestQueueAcceptanceFailureCleansUnacceptedOwnership(t *testing.T) {
 	report := configuredMayaHostCapabilityRecord(mayaHostConfig{ID: "maya-win-01", Health: "healthy"}, now)
 	report.TargetProfiles = []string{"default"}
 	report.TargetProfileHostPools = map[string]string{"default": "windows-maya"}
-	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "locked", Slots: 1, SessionID: "session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "locked", Slots: 1, SessionID: "session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	repoDir := writeRunConfigFixture(t)
 	runID := "20260717T120000.000000000Z"
 	run, _, _, _, _, err := handler.queueHostAgentRun(repoDir, controlPlaneSubmission{Version: controlPlaneAPIVersion, Scenario: "smoke", TargetProfile: "default", StopAfter: stopAfterAlways}, runOptions{ScenarioName: "smoke", TargetProfile: "default", StopAfter: stopAfterAlways, AssignedRunID: runID, AssignedEventPrefix: []byte("invalid")}, scenarioRequirements{}, defaultRunRuntime())
@@ -881,7 +886,7 @@ func TestQueueUsesLaterCompatibleHostWhenFirstHostLockIsBusy(t *testing.T) {
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
 	for index, hostID := range []string{"maya-win-01", "maya-win-02"} {
 		agentID := fmt.Sprintf("agent-%d", index+1)
-		handler.hostAgents[agentID] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: agentID, HostID: hostID, State: "ready", Slots: 1, SessionID: "session-" + agentID, SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+		handler.hostAgents[agentID] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: agentID, HostID: hostID, State: "ready", Slots: 1, SessionID: "session-" + agentID, SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	}
 	handler.queuedRuns["run-a"] = &controlPlaneQueuedRun{record: controlPlaneQueueRecord{RunID: "run-a", State: "queued", AcceptedAt: now.Format(time.RFC3339Nano), Submission: controlPlaneSubmission{TargetProfile: "default"}, HostPool: "windows-maya"}, done: make(chan struct{})}
 	externalRelease, locked, err := acquireHostLock(filepath.Join(handler.dataDir, "fake-host"), "maya-win-01")
@@ -914,7 +919,7 @@ func TestQueueUsesLaterCompatibleHostWhenFirstHostLockErrors(t *testing.T) {
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
 	for index, hostID := range []string{"maya-win-01", "maya-win-02"} {
 		agentID := fmt.Sprintf("agent-%d", index+1)
-		handler.hostAgents[agentID] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: agentID, HostID: hostID, State: "ready", Slots: 1, SessionID: "session-" + agentID, SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+		handler.hostAgents[agentID] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: agentID, HostID: hostID, State: "ready", Slots: 1, SessionID: "session-" + agentID, SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	}
 	handler.queuedRuns["run-a"] = &controlPlaneQueuedRun{record: controlPlaneQueueRecord{RunID: "run-a", State: "queued", AcceptedAt: now.Format(time.RFC3339Nano), Submission: controlPlaneSubmission{TargetProfile: "default"}, HostPool: "windows-maya"}, done: make(chan struct{})}
 	badLock := filepath.Join(handler.dataDir, "fake-host", ".maya-stall", "state", "locks", "hosts", "maya-win-01.lock")
@@ -941,7 +946,7 @@ func TestQueueWaitReasonReportsExternalHostLockContention(t *testing.T) {
 	report.TargetProfiles = []string{"default"}
 	report.TargetProfileHostPools = map[string]string{"default": "windows-maya"}
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
-	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	queued := &controlPlaneQueuedRun{record: controlPlaneQueueRecord{RunID: "run-a", State: "queued", AcceptedAt: now.Format(time.RFC3339Nano), Submission: controlPlaneSubmission{TargetProfile: "default"}, HostPool: "windows-maya"}, done: make(chan struct{})}
 	handler.queuedRuns["run-a"] = queued
 	externalRelease, locked, err := acquireHostLock(filepath.Join(handler.dataDir, "fake-host"), "maya-win-01")
@@ -968,7 +973,7 @@ func TestQueueSurfacesHostLockIOErrors(t *testing.T) {
 	report.TargetProfiles = []string{"default"}
 	report.TargetProfileHostPools = map[string]string{"default": "windows-maya"}
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
-	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	handler.queuedRuns["run-a"] = &controlPlaneQueuedRun{record: controlPlaneQueueRecord{RunID: "run-a", State: "queued", AcceptedAt: now.Format(time.RFC3339Nano), Submission: controlPlaneSubmission{TargetProfile: "default"}, HostPool: "windows-maya"}, done: make(chan struct{})}
 	fakeRoot := filepath.Join(handler.dataDir, "fake-host")
 	if err := os.MkdirAll(fakeRoot, 0o700); err != nil {
@@ -994,8 +999,8 @@ func TestQueueRetainsRunWhenHostLockErrorsBesideCompatibleBusyHost(t *testing.T)
 	report.TargetProfiles = []string{"default"}
 	report.TargetProfileHostPools = map[string]string{"default": "windows-maya"}
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
-	handler.hostAgents["broken"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "broken", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "broken-session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
-	handler.hostAgents["busy"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "busy", HostID: "maya-win-02", State: "locked", Slots: 1, RunID: "active", SessionID: "busy-session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	handler.hostAgents["broken"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "broken", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "broken-session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	handler.hostAgents["busy"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "busy", HostID: "maya-win-02", State: "locked", Slots: 1, RunID: "active", SessionID: "busy-session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	queued := &controlPlaneQueuedRun{record: controlPlaneQueueRecord{RunID: "run-a", State: "queued", AcceptedAt: now.Format(time.RFC3339Nano), Submission: controlPlaneSubmission{TargetProfile: "default"}, HostPool: "windows-maya"}, done: make(chan struct{})}
 	handler.queuedRuns["run-a"] = queued
 	fakeRoot := filepath.Join(handler.dataDir, "fake-host")
@@ -1034,7 +1039,7 @@ func TestQueueReloadFailureCannotReserveHostWithoutWaiter(t *testing.T) {
 	report.TargetProfiles = []string{"default"}
 	report.TargetProfileHostPools = map[string]string{"default": "windows-maya"}
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
-	host := &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	host := &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	handler.hostAgents["agent-1"] = host
 	if selected, _, _, _, _ := handler.selectQueuedRun(runID); selected != nil || host.status.State != "ready" || queued.releaseHostLock != nil {
 		t.Fatalf("ownerless queued reload reserved Host: selected=%+v host=%+v", selected, host.status)
@@ -1052,7 +1057,7 @@ func TestQueueHostLockIODoesNotBlockControlPlaneState(t *testing.T) {
 	report.TargetProfiles = []string{"default"}
 	report.TargetProfileHostPools = map[string]string{"default": "windows-maya"}
 	report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
-	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
+	handler.hostAgents["agent-1"] = &controlPlaneHostAgent{status: hostAgentStatusResponse{AgentID: "agent-1", HostID: "maya-win-01", State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, DeadlineActions: true, Capabilities: report}, sessionExpiresAt: now.Add(time.Minute)}
 	handler.queuedRuns["run-a"] = &controlPlaneQueuedRun{record: controlPlaneQueueRecord{RunID: "run-a", State: "queued", AcceptedAt: now.Format(time.RFC3339Nano), Submission: controlPlaneSubmission{TargetProfile: "default"}, HostPool: "windows-maya"}, done: make(chan struct{})}
 
 	lockStarted := make(chan struct{})

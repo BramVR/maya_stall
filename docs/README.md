@@ -139,6 +139,8 @@ Pick whichever matches your intent:
   [control-plane](commands/control-plane.md),
   [host-agent](commands/host-agent.md), [events](commands/events.md),
   [logs](commands/logs.md), [result](commands/result.md),
+  [status](commands/status.md), [stop](commands/stop.md),
+  [extend](commands/extend.md),
   [evidence](commands/evidence.md),
   [screenshot](commands/screenshot.md), [record](commands/record.md),
   [review-comment](commands/review-comment.md).

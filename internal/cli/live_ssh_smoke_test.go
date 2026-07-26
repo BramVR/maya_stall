@@ -178,6 +178,7 @@ func TestOptInRealSSHRunSmoke(t *testing.T) {
 	}
 	restoreLiveSessionBrokerFixture(t, host)
 	t.Run("shared Host Agent path", runOptInRealSharedHostAgentRunSmoke)
+	t.Run("shared Kept Session deadline path", runOptInRealSharedKeptSessionDeadlineSmoke)
 }
 
 func TestOptInRealHostLockContentionAndRecoverySmoke(t *testing.T) {

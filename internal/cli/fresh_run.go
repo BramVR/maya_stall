@@ -501,7 +501,7 @@ func (run *freshRunLifecycle) setup() error {
 	}
 
 	run.failedLayer = failureLayerRunState
-	if err := writeRunRetentionRecord(run.context, newRunRetentionRecord(run.context, run.manifest, host.Config, "running", "")); err != nil {
+	if err := writeRunRetentionRecord(run.context, newRunRetentionRecord(run.context, run.manifest, host.Config, "running", "", run.options.AssignedHardDeadline, run.runtime.Now())); err != nil {
 		return err
 	}
 	if err := run.host.markActive(run.manifest.RunID); err != nil {
@@ -1495,7 +1495,7 @@ func (run *freshRunLifecycle) retainSession(reason string) error {
 	if session.BrokerAdapter != run.session.BrokerAdapter || session.SessionID != run.session.SessionID {
 		return fmt.Errorf("session broker retained a different Maya UI Session: started %s/%s, retained %s/%s", run.session.BrokerAdapter, run.session.SessionID, session.BrokerAdapter, session.SessionID)
 	}
-	record := newRunRetentionRecord(run.context, run.manifest, run.host.Config, "kept", reason)
+	record := newRunRetentionRecord(run.context, run.manifest, run.host.Config, "kept", reason, run.options.AssignedHardDeadline, run.runtime.Now())
 	stampKeptSessionDeadline(&record, run.runtime.Now(), effectiveKeepTTL(run.options.KeepTTL))
 	record.BrokerCapabilities = retention.RetentionCapabilities()
 	record.RemoteSession = session
@@ -1587,7 +1587,7 @@ func (run *freshRunLifecycle) preserveStoppedRunForCleanup() error {
 		run.stopHostLockHeartbeat = nil
 		run.checkHostLockHeartbeat = nil
 	}
-	record := newRunRetentionRecord(run.context, run.manifest, run.host.Config, "kept", "cleanup-pending-after-ledger-failure")
+	record := newRunRetentionRecord(run.context, run.manifest, run.host.Config, "kept", "cleanup-pending-after-ledger-failure", run.options.AssignedHardDeadline, run.runtime.Now())
 	record.StopPhase = "session-stopped"
 	record.RemoteSession = retainedSessionRecord{
 		BrokerAdapter: run.session.BrokerAdapter,

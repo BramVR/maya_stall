@@ -41,6 +41,7 @@ type runRuntime struct {
 	SessionStarted         func(brokerSessionIdentity) error
 	ControlPlaneHTTPClient *http.Client
 	ControlPlaneServe      func(controlPlaneServeOptions, http.Handler) error
+	HostAgentHeartbeat     <-chan time.Time
 	Cancel                 <-chan error
 	CancelWait             time.Duration
 }

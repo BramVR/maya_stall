@@ -16,6 +16,11 @@ origin-only HTTPS Control Plane URL. Authentication defaults to the token in
 `MAYA_STALL_CONTROL_PLANE_TOKEN`; `--control-plane-token-env <name>` selects a
 different environment variable.
 
+Assigned configured Runs also report the durable Host Lock `idleDeadline` and
+`hardDeadline`. `expiryReason` is `idle`, `hard-lifetime`, or `kept-session`
+while expiry cleanup is pending. These fields remain tied to the current
+token-fenced assignment, not the submitting CLI connection.
+
 Queued configured Runs report `state: queued`, a one-based `queuePosition`,
 `hostPool`, normalized `requiredCapabilities`, and either
 `awaiting-host-assignment`, `compatible-hosts-busy`, or
@@ -34,6 +39,7 @@ state path, remote workspace, broker session id, `keepDeadline`, and human
 `keepRemaining` value recorded at run time. Remaining time is rendered like
 `42m left`; an elapsed deadline is `expired`, while a legacy record not yet
 contacted by `run` or `doctor` is `unstamped`. The same fields appear in JSON.
+Use [`extend`](extend.md) for an explicit policy-bounded extension.
 
 For broker-backed runs, status is truth-seeking: it reads the local Run Record,
 then asks the Session Broker whether the retained Maya UI Session still exists.

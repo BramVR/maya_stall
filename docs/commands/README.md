@@ -26,3 +26,4 @@ same order as the CLI help.
 - [review-comment](review-comment.md)
 - [attach](attach.md)
 - [stop](stop.md)
+- [extend](extend.md)

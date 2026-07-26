@@ -15,7 +15,7 @@ func TestCompatibleHostAgentCandidatesAreDeterministicWithinTargetProfile(t *tes
 		report.Capabilities.SessionMayaBuild = report.Capabilities.MayaBuilds[0]
 		report.TargetProfiles = profiles
 		return &controlPlaneHostAgent{status: hostAgentStatusResponse{
-			AgentID: agentID, HostID: hostID, State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, Capabilities: report,
+			AgentID: agentID, HostID: hostID, State: "ready", Slots: 1, SessionID: "session", SessionBinding: true, DeadlineActions: true, Capabilities: report,
 		}}
 	}
 	agents := map[string]*controlPlaneHostAgent{

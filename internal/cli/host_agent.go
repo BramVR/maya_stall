@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -69,12 +70,13 @@ type hostAgentEnrollmentRecord struct {
 }
 
 type hostAgentRegistrationRequest struct {
-	Version        int                      `json:"version"`
-	AgentID        string                   `json:"agentId"`
-	HostID         string                   `json:"hostId"`
-	Slots          int                      `json:"slots"`
-	SessionBinding bool                     `json:"sessionBinding"`
-	Capabilities   mayaHostCapabilityRecord `json:"capabilities"`
+	Version         int                      `json:"version"`
+	AgentID         string                   `json:"agentId"`
+	HostID          string                   `json:"hostId"`
+	Slots           int                      `json:"slots"`
+	SessionBinding  bool                     `json:"sessionBinding"`
+	DeadlineActions bool                     `json:"deadlineActions"`
+	Capabilities    mayaHostCapabilityRecord `json:"capabilities"`
 }
 
 type hostAgentNextRequest struct {
@@ -89,16 +91,17 @@ type hostAgentHeartbeatRequest struct {
 }
 
 type hostAgentStatusResponse struct {
-	Version        int                      `json:"version"`
-	Kind           string                   `json:"kind"`
-	AgentID        string                   `json:"agentId"`
-	HostID         string                   `json:"hostId"`
-	Slots          int                      `json:"slots"`
-	State          string                   `json:"state"`
-	RunID          string                   `json:"runId,omitempty"`
-	SessionID      string                   `json:"sessionId,omitempty"`
-	SessionBinding bool                     `json:"sessionBinding"`
-	Capabilities   mayaHostCapabilityRecord `json:"-"`
+	Version         int                      `json:"version"`
+	Kind            string                   `json:"kind"`
+	AgentID         string                   `json:"agentId"`
+	HostID          string                   `json:"hostId"`
+	Slots           int                      `json:"slots"`
+	State           string                   `json:"state"`
+	RunID           string                   `json:"runId,omitempty"`
+	SessionID       string                   `json:"sessionId,omitempty"`
+	SessionBinding  bool                     `json:"sessionBinding"`
+	DeadlineActions bool                     `json:"deadlineActions"`
+	Capabilities    mayaHostCapabilityRecord `json:"-"`
 }
 
 type hostAgentAssignmentResponse struct {
@@ -112,6 +115,13 @@ type hostAgentAssignmentResponse struct {
 	EventPrefix       []byte                   `json:"eventPrefix,omitempty"`
 	Capabilities      mayaHostCapabilityRecord `json:"-"`
 	SelectedMayaBuild string                   `json:"selectedMayaBuild,omitempty"`
+	Action            string                   `json:"action,omitempty"`
+	HardDeadline      string                   `json:"hardDeadline,omitempty"`
+	KeepDeadline      string                   `json:"keepDeadline,omitempty"`
+	BrokerSession     *brokerSessionIdentity   `json:"brokerSession,omitempty"`
+	ExpiryFromState   string                   `json:"expiryFromState,omitempty"`
+	ExpiryReason      string                   `json:"expiryReason,omitempty"`
+	DeadlineEvents    []hostLockDeadlineEvent  `json:"deadlineEvents,omitempty"`
 }
 
 type hostAgentStatusResponseAlias hostAgentStatusResponse
@@ -222,6 +232,31 @@ type hostAgentCompletionRequest struct {
 	Files     []controlPlaneFile `json:"files"`
 }
 
+type hostAgentKeptRequest struct {
+	Version   int                      `json:"version"`
+	RunID     string                   `json:"runId"`
+	LockToken string                   `json:"lockToken"`
+	SessionID string                   `json:"sessionId"`
+	Outcome   runCommandJSON           `json:"outcome"`
+	Progress  hostAgentProgressRequest `json:"progress"`
+}
+
+type hostAgentKeptResponse struct {
+	Version         int                     `json:"version"`
+	Kind            string                  `json:"kind"`
+	RunID           string                  `json:"runId"`
+	State           string                  `json:"state"`
+	Action          string                  `json:"action"`
+	IdleDeadline    string                  `json:"idleDeadline"`
+	HardDeadline    string                  `json:"hardDeadline"`
+	KeepDeadline    string                  `json:"keepDeadline"`
+	KeepRemaining   string                  `json:"keepRemaining"`
+	ExpiryFromState string                  `json:"expiryFromState,omitempty"`
+	ExpiryReason    string                  `json:"expiryReason,omitempty"`
+	BrokerSession   *brokerSessionIdentity  `json:"brokerSession,omitempty"`
+	DeadlineEvents  []hostLockDeadlineEvent `json:"deadlineEvents,omitempty"`
+}
+
 type hostAgentFailureRequest struct {
 	Version    int    `json:"version"`
 	RunID      string `json:"runId"`
@@ -231,26 +266,45 @@ type hostAgentFailureRequest struct {
 	Quarantine bool   `json:"quarantine,omitempty"`
 }
 
+type hostAgentMutationOutbox struct {
+	Version    int                         `json:"version"`
+	RunID      string                      `json:"runId"`
+	LockToken  string                      `json:"lockToken"`
+	Kind       string                      `json:"kind"`
+	Cleanup    *hostAgentCleanupMutation   `json:"cleanup,omitempty"`
+	Completion *hostAgentCompletionRequest `json:"completion,omitempty"`
+	Failure    *hostAgentFailureRequest    `json:"failure,omitempty"`
+}
+
+type hostAgentCleanupMutation struct {
+	BrokerSession   brokerSessionIdentity `json:"brokerSession"`
+	ExpiryFromState string                `json:"expiryFromState"`
+}
+
 type hostAgentLockRecord struct {
-	Version                int                    `json:"version"`
-	RunID                  string                 `json:"runId"`
-	AgentID                string                 `json:"agentId"`
-	HostID                 string                 `json:"hostId"`
-	LockToken              string                 `json:"lockToken"`
-	State                  string                 `json:"state"`
-	CreatedAt              string                 `json:"createdAt"`
+	Version   int    `json:"version"`
+	RunID     string `json:"runId"`
+	AgentID   string `json:"agentId"`
+	HostID    string `json:"hostId"`
+	LockToken string `json:"lockToken"`
+	State     string `json:"state"`
+	CreatedAt string `json:"createdAt"`
+	hostLockDeadlines
+	ExpiryFromState        string                 `json:"expiryFromState,omitempty"`
+	ExpiryReason           string                 `json:"expiryReason,omitempty"`
 	SessionBindingRequired bool                   `json:"sessionBindingRequired,omitempty"`
 	BrokerSession          *brokerSessionIdentity `json:"brokerSession,omitempty"`
 }
 
 type hostAgentAssignmentRecord struct {
-	Version                int                      `json:"version"`
-	RunID                  string                   `json:"runId"`
-	AgentID                string                   `json:"agentId"`
-	HostID                 string                   `json:"hostId"`
-	LockToken              string                   `json:"lockToken"`
-	State                  string                   `json:"state"`
-	CreatedAt              string                   `json:"createdAt"`
+	Version   int    `json:"version"`
+	RunID     string `json:"runId"`
+	AgentID   string `json:"agentId"`
+	HostID    string `json:"hostId"`
+	LockToken string `json:"lockToken"`
+	State     string `json:"state"`
+	CreatedAt string `json:"createdAt"`
+	hostLockDeadlines
 	Submission             controlPlaneSubmission   `json:"submission"`
 	EventPrefix            []byte                   `json:"eventPrefix,omitempty"`
 	Capabilities           mayaHostCapabilityRecord `json:"capabilities"`
@@ -262,6 +316,16 @@ type hostAgentAssignmentRecord struct {
 	AssignedLedger         *runLedgerRecord         `json:"assignedLedger,omitempty"`
 	ProgressSequence       int64                    `json:"progressSequence,omitempty"`
 	ProgressDigest         string                   `json:"progressDigest,omitempty"`
+	DeadlineEvents         []hostLockDeadlineEvent  `json:"deadlineEvents,omitempty"`
+	ExpiryFromState        string                   `json:"expiryFromState,omitempty"`
+	ExpiryReason           string                   `json:"expiryReason,omitempty"`
+}
+
+type hostLockDeadlineEvent struct {
+	Type      string `json:"type"`
+	Detail    string `json:"detail"`
+	Timestamp string `json:"timestamp"`
+	Ordinal   int    `json:"ordinal"`
 }
 
 type controlPlaneHostAgent struct {
@@ -568,7 +632,7 @@ func (handler *controlPlaneHandler) loadHostAgentState() error {
 		if err := readPrivateJSON(filepath.Join(handler.dataDir, "host-locks", entry.Name()), &lock); err != nil {
 			return err
 		}
-		validState := lock.State == "assigned" || lock.State == "confirmed" || lock.State == "finishing" || lock.State == "quarantined"
+		validState := lock.State == "assigned" || lock.State == "confirmed" || lock.State == "kept" || lock.State == "expiring" || lock.State == "finishing" || lock.State == "quarantined"
 		if lock.Version != hostAgentAPIVersion || lock.HostID != hostID || validateRunID(lock.RunID) != nil || lock.LockToken == "" || !validState || invalidBrokerSession(lock.BrokerSession) {
 			return fmt.Errorf("invalid durable Host Lock for %s", hostID)
 		}
@@ -580,8 +644,17 @@ func (handler *controlPlaneHandler) loadHostAgentState() error {
 		if err := readPrivateJSON(filepath.Join(handler.dataDir, "assignments", lock.RunID+".json"), &assignment); err != nil {
 			return err
 		}
-		if assignment.Version != hostAgentAPIVersion || assignment.RunID != lock.RunID || assignment.AgentID != lock.AgentID || assignment.HostID != lock.HostID || !sameLockToken(assignment.LockToken, lock.LockToken) || assignment.State != lock.State || assignment.SessionBindingRequired != lock.SessionBindingRequired || !sameBrokerSession(assignment.BrokerSession, lock.BrokerSession) {
+		if assignment.Version != hostAgentAPIVersion || assignment.RunID != lock.RunID || assignment.AgentID != lock.AgentID || assignment.HostID != lock.HostID || !sameLockToken(assignment.LockToken, lock.LockToken) || assignment.State != lock.State || assignment.ExpiryFromState != lock.ExpiryFromState || assignment.ExpiryReason != lock.ExpiryReason || assignment.SessionBindingRequired != lock.SessionBindingRequired || !sameBrokerSession(assignment.BrokerSession, lock.BrokerSession) {
 			return fmt.Errorf("durable assignment for %s does not match its Host Lock", lock.RunID)
+		}
+		if assignment.HardDeadline == "" && lock.HardDeadline == "" {
+			assignment.hostLockDeadlines = newHostLockDeadlines(handler.runtime.Now(), handler.hostLockPolicy)
+			if err := newHostAgentTransitionStore(handler.dataDir).Commit(assignment, handler.prepareRecoveredHostAgentTransition); err != nil {
+				return fmt.Errorf("stamp durable Host Lock deadlines for %s: %w", lock.RunID, err)
+			}
+			lock.hostLockDeadlines = assignment.hostLockDeadlines
+		} else if assignment.hostLockDeadlines != lock.hostLockDeadlines || assignment.validate() != nil {
+			return fmt.Errorf("invalid durable Host Lock deadlines for %s", hostID)
 		}
 		if assignment.State == "finishing" {
 			if assignment.Terminal == nil || assignment.TerminalLedger == nil {
@@ -590,19 +663,21 @@ func (handler *controlPlaneHandler) loadHostAgentState() error {
 			if err := validateFinishingHostAgentAssignment(assignment); err != nil {
 				return fmt.Errorf("invalid finishing Host Agent assignment %s: %w", assignment.RunID, err)
 			}
-			repoDir := filepath.Join(handler.dataDir, "runs", assignment.RunID, "repo")
-			if err := cleanupRunState(repoDir, assignment.RunID); err != nil {
-				return fmt.Errorf("resume finishing Host Agent cleanup: %w", err)
+			if !agent.status.DeadlineActions {
+				repoDir := filepath.Join(handler.dataDir, "runs", assignment.RunID, "repo")
+				if err := cleanupRunState(repoDir, assignment.RunID); err != nil {
+					return fmt.Errorf("resume legacy finishing Host Agent cleanup: %w", err)
+				}
+				if err := removeRepoHostLockForRun(filepath.Join(handler.dataDir, "fake-host"), assignment.HostID, assignment.RunID); err != nil {
+					return fmt.Errorf("resume legacy finishing shared Host Lock release: %w", err)
+				}
+				completed := assignment
+				completed.State = "completed"
+				if err := newHostAgentTransitionStore(handler.dataDir).Commit(completed, handler.prepareRecoveredHostAgentTransition); err != nil {
+					return fmt.Errorf("resume legacy completed Host Agent transition: %w", err)
+				}
+				continue
 			}
-			if err := removeRepoHostLockForRun(filepath.Join(handler.dataDir, "fake-host"), assignment.HostID, assignment.RunID); err != nil {
-				return fmt.Errorf("resume finishing shared Host Lock release: %w", err)
-			}
-			completed := assignment
-			completed.State = "completed"
-			if err := newHostAgentTransitionStore(handler.dataDir).Commit(completed, handler.prepareRecoveredHostAgentTransition); err != nil {
-				return fmt.Errorf("resume completed Host Agent transition: %w", err)
-			}
-			continue
 		}
 		agent.status.RunID = lock.RunID
 		if lock.State == "quarantined" || agent.status.State == "quarantined" {
@@ -754,13 +829,20 @@ func (handler *controlPlaneHandler) recoverHostAgentQuarantineMarkers() error {
 
 func (handler *controlPlaneHandler) prepareRecoveredHostAgentTransition(record hostAgentAssignmentRecord, entryName string) (hostAgentAssignmentRecord, error) {
 	agent := handler.hostAgents[record.AgentID]
-	if record.Version != hostAgentAPIVersion || validateRunID(record.RunID) != nil || entryName != record.RunID+".json" || agent == nil || agent.enrollment.HostID != record.HostID || record.LockToken == "" || record.State != "assigned" && record.State != "confirmed" && record.State != "finishing" && record.State != "quarantined" && record.State != "completed" {
+	if agent == nil {
 		return hostAgentAssignmentRecord{}, fmt.Errorf("invalid Host Agent transaction %s", entryName)
 	}
-	if agent.status.State != "quarantined" || agent.status.RunID != record.RunID || record.State == "completed" {
+	return prepareRecoveredHostAgentTransitionSnapshot(handler.dataDir, agent.enrollment, agent.status, record, entryName)
+}
+
+func prepareRecoveredHostAgentTransitionSnapshot(dataDir string, enrollment hostAgentEnrollmentRecord, status hostAgentStatusResponse, record hostAgentAssignmentRecord, entryName string) (hostAgentAssignmentRecord, error) {
+	if record.Version != hostAgentAPIVersion || validateRunID(record.RunID) != nil || entryName != record.RunID+".json" || enrollment.AgentID != record.AgentID || enrollment.HostID != record.HostID || record.LockToken == "" || record.State != "assigned" && record.State != "confirmed" && record.State != "kept" && record.State != "expiring" && record.State != "finishing" && record.State != "quarantined" && record.State != "completed" {
+		return hostAgentAssignmentRecord{}, fmt.Errorf("invalid Host Agent transaction %s", entryName)
+	}
+	if status.State != "quarantined" || status.RunID != record.RunID || record.State == "completed" {
 		return record, nil
 	}
-	terminalLedger, err := newRunLedgerStore(filepath.Join(handler.dataDir, "runs", record.RunID, "repo")).Read(record.RunID)
+	terminalLedger, err := newRunLedgerStore(filepath.Join(dataDir, "runs", record.RunID, "repo")).Read(record.RunID)
 	if err != nil {
 		return hostAgentAssignmentRecord{}, fmt.Errorf("recover quarantined Host Agent transaction: %w", err)
 	}
@@ -896,6 +978,10 @@ func (handler *controlPlaneHandler) serveHostAgentAPI(response http.ResponseWrit
 		handler.serveHostAgentSession(response, request, parts[2], parts[4])
 	case len(parts) == 6 && parts[3] == "assignments" && parts[5] == "progress" && request.Method == http.MethodPost:
 		handler.serveHostAgentProgress(response, request, parts[2], parts[4])
+	case len(parts) == 6 && parts[3] == "assignments" && parts[5] == "kept" && request.Method == http.MethodPost:
+		handler.serveHostAgentKept(response, request, parts[2], parts[4])
+	case len(parts) == 6 && parts[3] == "assignments" && parts[5] == "action" && request.Method == http.MethodPost:
+		handler.serveHostAgentAction(response, request, parts[2], parts[4])
 	case len(parts) == 6 && parts[3] == "assignments" && parts[5] == "complete" && request.Method == http.MethodPost:
 		handler.serveHostAgentComplete(response, request, parts[2], parts[4])
 	case len(parts) == 6 && parts[3] == "assignments" && parts[5] == "fail" && request.Method == http.MethodPost:
@@ -1062,8 +1148,8 @@ func (handler *controlPlaneHandler) serveHostAgentRegistration(response http.Res
 				writeControlPlaneError(response, http.StatusConflict, "Windows Host Agent assignment is quarantined")
 				return
 			}
-			if assignment.record.State == "finishing" {
-				writeControlPlaneError(response, http.StatusConflict, "Windows Host Agent cleanup is still committing")
+			if assignment.record.State != "assigned" && assignment.record.State != "confirmed" && !registration.DeadlineActions {
+				writeControlPlaneError(response, http.StatusConflict, "Windows Host Agent does not support the outstanding Host Lock deadline action")
 				return
 			}
 			if assignment.finishing {
@@ -1073,14 +1159,7 @@ func (handler *controlPlaneHandler) serveHostAgentRegistration(response http.Res
 			sessionExpired := agent.status.SessionID != "" && !now.Before(agent.sessionExpiresAt)
 			restartGraceExpired := agent.status.SessionID == "" && !now.Before(agent.takeoverNotBefore)
 			if assignment.record.State == "confirmed" && !assignment.finishing && (sessionExpired || restartGraceExpired) {
-				handler.mu.Unlock()
-				if _, _, err := handler.quarantineHostAgentAssignment(assignment, agent, "Windows Host Agent process disappeared before Maya session shutdown was verified"); err != nil {
-					handler.mu.Lock()
-					writeControlPlaneError(response, http.StatusInternalServerError, "persist quarantined Windows Host Agent assignment")
-					return
-				}
-				handler.mu.Lock()
-				writeControlPlaneError(response, http.StatusConflict, "confirmed Windows Host Agent assignment quarantined after process loss")
+				writeControlPlaneError(response, http.StatusConflict, "confirmed Windows Host Agent assignment is waiting for its Host Lock idle deadline")
 				return
 			}
 		}
@@ -1101,6 +1180,7 @@ func (handler *controlPlaneHandler) serveHostAgentRegistration(response http.Res
 	candidate := agent.status
 	candidate.SessionID = sessionID
 	candidate.SessionBinding = registration.SessionBinding
+	candidate.DeadlineActions = registration.DeadlineActions
 	candidate.Capabilities = registration.Capabilities
 	if candidate.RunID == "" {
 		candidate.State = "ready"
@@ -1126,15 +1206,58 @@ func (handler *controlPlaneHandler) serveHostAgentHeartbeat(response http.Respon
 		return
 	}
 	handler.mu.Lock()
-	defer handler.mu.Unlock()
 	agent := handler.hostAgents[agentID]
 	if !requestMatchesHostAgentCredential(request, agent) {
+		handler.mu.Unlock()
 		writeControlPlaneError(response, http.StatusUnauthorized, "Windows Host Agent authentication changed")
 		return
 	}
-	if !handler.acceptHostAgentSession(agent, heartbeat.SessionID) {
+	var checkpointAssignment *controlPlaneHostAgentAssignment
+	if agent != nil && agent.status.RunID != "" {
+		checkpointAssignment = handler.assignments[agent.status.RunID]
+	}
+	if checkpointAssignment != nil {
+		handler.mu.Unlock()
+		checkpointAssignment.checkpointMu.Lock()
+		defer checkpointAssignment.checkpointMu.Unlock()
+		handler.mu.Lock()
+	}
+	defer handler.mu.Unlock()
+	agent = handler.hostAgents[agentID]
+	if !requestMatchesHostAgentCredential(request, agent) || !handler.acceptHostAgentSession(agent, heartbeat.SessionID) {
 		writeControlPlaneError(response, http.StatusConflict, "Windows Host Agent session changed")
 		return
+	}
+	if agent.status.RunID != "" {
+		assignment := handler.assignments[agent.status.RunID]
+		if assignment == nil || assignment != checkpointAssignment || assignment.record.AgentID != agentID {
+			writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
+			return
+		}
+		if assignment.record.State == "expiring" || assignment.record.State == "finishing" {
+			agent.status.Capabilities = heartbeat.Capabilities
+			if err := handler.persistHostAgentStatus(agent); err != nil {
+				writeControlPlaneError(response, http.StatusInternalServerError, "persist Windows Host Agent capabilities")
+				return
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(agent.status)
+			return
+		}
+		if assignment.record.expiryReason(handler.runtime.Now()) != "" {
+			writeControlPlaneError(response, http.StatusConflict, "Host Lock deadline expired")
+			return
+		}
+		previous := assignment.record.hostLockDeadlines
+		if err := assignment.record.recordHeartbeat(handler.runtime.Now(), handler.hostLockPolicy); err != nil {
+			writeControlPlaneError(response, http.StatusConflict, "Host Lock deadline expired")
+			return
+		}
+		if err := newHostAgentTransitionStore(handler.dataDir).Commit(assignment.record, handler.prepareRecoveredHostAgentTransition); err != nil {
+			assignment.record.hostLockDeadlines = previous
+			writeControlPlaneError(response, http.StatusInternalServerError, "persist Host Lock heartbeat")
+			return
+		}
 	}
 	agent.status.Capabilities = heartbeat.Capabilities
 	if err := handler.persistHostAgentStatus(agent); err != nil {
@@ -1196,7 +1319,12 @@ func (handler *controlPlaneHandler) serveHostAgentNextAssignment(response http.R
 		}
 		if agent.status.RunID != "" {
 			assignment := handler.assignments[agent.status.RunID]
-			if assignment != nil && (assignment.record.State == "assigned" || assignment.record.State == "confirmed") {
+			if assignment != nil && (assignment.record.State == "assigned" || assignment.record.State == "confirmed" || assignment.record.State == "kept" || assignment.record.State == "expiring" || assignment.record.State == "finishing") {
+				if assignment.record.State != "assigned" && assignment.record.State != "confirmed" && !agent.status.DeadlineActions {
+					handler.mu.Unlock()
+					writeControlPlaneError(response, http.StatusConflict, "Windows Host Agent does not support Host Lock deadline actions")
+					return
+				}
 				result := assignmentResponse(assignment.record)
 				handler.mu.Unlock()
 				response.Header().Set("Content-Type", "application/json")
@@ -1232,9 +1360,20 @@ func (handler *controlPlaneHandler) disconnectHostAgentSession(agentID string, s
 }
 
 func assignmentResponse(record hostAgentAssignmentRecord) hostAgentAssignmentResponse {
+	action := "execute"
+	switch record.State {
+	case "kept":
+		action = "wait"
+	case "expiring":
+		action = "cleanup"
+	case "finishing":
+		action = "finish"
+	}
 	return hostAgentAssignmentResponse{
 		Version: hostAgentAPIVersion, Kind: "host-agent-assignment", RunID: record.RunID,
 		AgentID: record.AgentID, HostID: record.HostID, LockToken: record.LockToken, Submission: record.Submission, EventPrefix: record.EventPrefix, Capabilities: record.Capabilities, SelectedMayaBuild: record.SelectedMayaBuild,
+		Action: action, HardDeadline: record.HardDeadline, KeepDeadline: record.KeepDeadline, BrokerSession: record.BrokerSession, ExpiryFromState: record.ExpiryFromState, ExpiryReason: record.ExpiryReason,
+		DeadlineEvents: append([]hostLockDeadlineEvent(nil), record.DeadlineEvents...),
 	}
 }
 
@@ -1385,8 +1524,14 @@ func (handler *controlPlaneHandler) serveHostAgentProgress(response http.Respons
 		writeControlPlaneError(response, http.StatusUnauthorized, "Windows Host Agent authentication changed")
 		return
 	}
+	deadlineExpired := assignment != nil && assignment.record.State == "expiring" && assignment.record.ExpiryFromState == "confirmed" &&
+		assignment.record.AgentID == agentID && sameLockToken(progress.LockToken, assignment.record.LockToken) && handler.acceptHostAgentSession(agent, progress.SessionID)
 	if progress.Version != hostAgentAPIVersion || progress.RunID != runID || progress.Checkpoint < 1 || !hostAgentAssignmentAcceptsProgress(assignment) || assignment.record.AgentID != agentID || agent == nil || !sameLockToken(progress.LockToken, assignment.record.LockToken) || !handler.acceptHostAgentSession(agent, progress.SessionID) {
 		handler.mu.Unlock()
+		if deadlineExpired {
+			writeControlPlaneError(response, http.StatusConflict, "Host Lock deadline expired")
+			return
+		}
 		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
 		return
 	}
@@ -1420,9 +1565,15 @@ func (handler *controlPlaneHandler) serveHostAgentProgress(response http.Respons
 	}
 	previousAssignment := assignment.record
 	repoDir := assignment.repoDir
+	transitionEnrollment := agent.enrollment
+	transitionStatus := agent.status
 	handler.mu.Unlock()
 
 	updatedAssignment := previousAssignment
+	if err := updatedAssignment.recordHeartbeat(handler.runtime.Now(), handler.hostLockPolicy); err != nil {
+		writeControlPlaneError(response, http.StatusConflict, "Host Lock deadline expired")
+		return
+	}
 	var identityErr error
 	ledgerStore := newRunLedgerStore(repoDir)
 	persistErr := ledgerStore.UpdateSnapshot(runID, func(snapshot *runLedgerSnapshot) error {
@@ -1452,7 +1603,10 @@ func (handler *controlPlaneHandler) serveHostAgentProgress(response http.Respons
 		return nil
 	})
 	if persistErr == nil {
-		persistErr = newHostAgentTransitionStore(handler.dataDir).SaveAssignment(updatedAssignment)
+		prepareTransition := func(record hostAgentAssignmentRecord, entryName string) (hostAgentAssignmentRecord, error) {
+			return prepareRecoveredHostAgentTransitionSnapshot(handler.dataDir, transitionEnrollment, transitionStatus, record, entryName)
+		}
+		persistErr = newHostAgentTransitionStore(handler.dataDir).Commit(updatedAssignment, prepareTransition)
 	}
 	// The per-run lock is released before taking handler.mu; quarantine may wait
 	// on the ledger while fenced by handler.mu without creating a lock cycle.
@@ -1481,6 +1635,260 @@ func (handler *controlPlaneHandler) serveHostAgentProgress(response http.Respons
 
 func hostAgentAssignmentAcceptsProgress(assignment *controlPlaneHostAgentAssignment) bool {
 	return assignment != nil && assignment.record.State == "confirmed" && !assignment.finishing
+}
+
+func mergeHostAgentKeptProgress(repoDir string, assignment hostAgentAssignmentRecord, progress hostAgentProgressRequest, now time.Time) (runLedgerRecord, error) {
+	expectedProfile := assignment.Submission.TargetProfile
+	if expectedProfile == "" {
+		expectedProfile = "default"
+	}
+	if progress.Version != hostAgentAPIVersion || progress.RunID != assignment.RunID || !sameLockToken(progress.LockToken, assignment.LockToken) ||
+		progress.Ledger.RunID != assignment.RunID || progress.Ledger.Scenario != assignment.Submission.Scenario ||
+		progress.Ledger.TargetProfile != expectedProfile || progress.Ledger.Host != assignment.HostID || progress.Ledger.State != "submitted" {
+		return runLedgerRecord{}, fmt.Errorf("Kept Session progress changed run identity") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	var mergedRecord runLedgerRecord
+	err := newRunLedgerStore(repoDir).UpdateSnapshot(assignment.RunID, func(snapshot *runLedgerSnapshot) error {
+		mergedEvents, err := mergeHostAgentProgressEvents(snapshot.Events, progress.Events)
+		if err != nil {
+			return err
+		}
+		eventCount, eventsOmitted, eventsTruncated, err := retainedRunLedgerEventMetadata(bytes.NewReader(mergedEvents))
+		if err != nil {
+			return err
+		}
+		snapshot.Events = mergedEvents
+		snapshot.Log = progress.Log
+		snapshot.Record.EventCount = eventCount
+		snapshot.Record.EventsOmitted = eventsOmitted
+		snapshot.Record.EventsTruncated = eventsTruncated
+		snapshot.Record.EventBytes = len(mergedEvents)
+		snapshot.Record.LogBytes = len(progress.Log)
+		snapshot.Record.LogTruncated = progress.Ledger.LogTruncated
+		snapshot.Record.Host = assignment.HostID
+		snapshot.Record.UpdatedAt = now.UTC().Format(time.RFC3339Nano)
+		mergedRecord = snapshot.Record
+		return nil
+	})
+	return mergedRecord, err
+}
+
+func (handler *controlPlaneHandler) serveHostAgentKept(response http.ResponseWriter, request *http.Request, agentID string, runID string) {
+	if validateRunID(runID) != nil {
+		writeControlPlaneError(response, http.StatusBadRequest, "invalid Host Agent Run ID")
+		return
+	}
+	var kept hostAgentKeptRequest
+	if err := decodeHostAgentRequest(request, &kept); err != nil || len(kept.Progress.Events) > maximumHostAgentProgressEventBytes || len(kept.Progress.Log) > maximumHostAgentProgressLogBytes || runLedgerEventLineCount(kept.Progress.Events) > maximumHostAgentProgressEvents {
+		writeControlPlaneError(response, http.StatusBadRequest, "invalid Kept Session transition")
+		return
+	}
+	handler.mu.Lock()
+	assignment := handler.assignments[runID]
+	agent := handler.hostAgents[agentID]
+	if !requestMatchesHostAgentCredential(request, agent) || assignment == nil {
+		handler.mu.Unlock()
+		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
+		return
+	}
+	handler.mu.Unlock()
+	assignment.checkpointMu.Lock()
+	defer assignment.checkpointMu.Unlock()
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	assignment = handler.assignments[runID]
+	agent = handler.hostAgents[agentID]
+	if kept.Version != hostAgentAPIVersion || kept.RunID != runID || kept.Progress.RunID != runID || !sameLockToken(kept.Progress.LockToken, kept.LockToken) || !sameLockToken(kept.Progress.SessionID, kept.SessionID) || assignment == nil || assignment.record.AgentID != agentID || agent == nil || !requestMatchesHostAgentCredential(request, agent) || !sameLockToken(kept.LockToken, assignment.record.LockToken) || assignment.finishing || !handler.acceptHostAgentSession(agent, kept.SessionID) {
+		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
+		return
+	}
+	if err := validateHostAgentKeptIdentity(assignment.record, kept.Outcome); err != nil || assignment.record.BrokerSession == nil || assignment.record.AssignedLedger == nil {
+		writeControlPlaneError(response, http.StatusBadRequest, "invalid Kept Session transition")
+		return
+	}
+	if assignment.record.State == "kept" || assignment.record.State == "expiring" {
+		action := "wait"
+		if assignment.record.State == "expiring" {
+			action = "cleanup"
+		}
+		agent.status.State = assignment.record.State
+		if err := handler.persistHostAgentStatus(agent); err != nil {
+			writeControlPlaneError(response, http.StatusInternalServerError, "persist Kept Session Agent status")
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(hostAgentActionResponse(assignment.record, handler.runtime.Now(), action, assignment.record.ExpiryReason))
+		return
+	}
+	if assignment.record.State != "confirmed" {
+		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
+		return
+	}
+	keptLedger, err := mergeHostAgentKeptProgress(assignment.repoDir, assignment.record, kept.Progress, handler.runtime.Now())
+	if err != nil {
+		writeControlPlaneError(response, http.StatusBadRequest, "invalid Kept Session progress")
+		return
+	}
+	previous := assignment.record
+	assignment.record.State = "kept"
+	keptLedger.State = "kept"
+	keptLedger.Status = kept.Outcome.Status
+	keptLedger.UpdatedAt = handler.runtime.Now().UTC().Format(time.RFC3339Nano)
+	assignment.record.AssignedLedger = &keptLedger
+	if err := assignment.record.markKept(handler.runtime.Now(), keepTTLOrDefault(assignment.record.Submission.KeepTTL), handler.hostLockPolicy); err != nil {
+		assignment.record = previous
+		writeControlPlaneError(response, http.StatusConflict, "Host Lock deadline expired")
+		return
+	}
+	handler.appendHostLockEventLocked(assignment, "kept-session.started", assignment.record.KeepDeadline)
+	if err := newHostAgentTransitionStore(handler.dataDir).Commit(assignment.record, handler.prepareRecoveredHostAgentTransition); err != nil {
+		assignment.record = previous
+		writeControlPlaneError(response, http.StatusInternalServerError, "persist Kept Session Host Lock")
+		return
+	}
+	agent.status.State = "kept"
+	if err := handler.persistHostAgentStatus(agent); err != nil {
+		writeControlPlaneError(response, http.StatusInternalServerError, "persist Kept Session Agent status")
+		return
+	}
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(hostAgentActionResponse(assignment.record, handler.runtime.Now(), "wait", ""))
+}
+
+func validateHostAgentKeptIdentity(assignment hostAgentAssignmentRecord, outcome runCommandJSON) error {
+	targetProfile := assignment.Submission.TargetProfile
+	if targetProfile == "" {
+		targetProfile = "default"
+	}
+	if outcome.Version != controlPlaneAPIVersion || outcome.Kind != "run" || !outcome.Accepted || outcome.RunID != assignment.RunID || outcome.Scenario != assignment.Submission.Scenario || outcome.TargetProfile != targetProfile || outcome.Host != assignment.HostID || outcome.StopPolicy != "kept" {
+		return fmt.Errorf("kept result does not match assignment")
+	}
+	return nil
+}
+
+func (handler *controlPlaneHandler) serveHostAgentAction(response http.ResponseWriter, request *http.Request, agentID string, runID string) {
+	if validateRunID(runID) != nil {
+		writeControlPlaneError(response, http.StatusBadRequest, "invalid Host Agent Run ID")
+		return
+	}
+	var action hostAgentLockRequest
+	if err := decodeHostAgentRequest(request, &action); err != nil {
+		writeControlPlaneError(response, http.StatusBadRequest, "invalid Host Lock action poll")
+		return
+	}
+	handler.mu.Lock()
+	assignment := handler.assignments[runID]
+	agent := handler.hostAgents[agentID]
+	if !requestMatchesHostAgentCredential(request, agent) || assignment == nil {
+		handler.mu.Unlock()
+		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
+		return
+	}
+	handler.mu.Unlock()
+	assignment.checkpointMu.Lock()
+	defer assignment.checkpointMu.Unlock()
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	assignment = handler.assignments[runID]
+	agent = handler.hostAgents[agentID]
+	if action.Version != hostAgentAPIVersion || action.RunID != runID || assignment == nil || assignment.record.AgentID != agentID || agent == nil || !requestMatchesHostAgentCredential(request, agent) || !sameLockToken(action.LockToken, assignment.record.LockToken) || !handler.acceptHostAgentSession(agent, action.SessionID) {
+		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
+		return
+	}
+	expiryReason := assignment.record.ExpiryReason
+	if assignment.record.State == "kept" {
+		expiryReason = assignment.record.expiryReason(handler.runtime.Now())
+	}
+	if assignment.record.State == "kept" && expiryReason != "" {
+		previous := assignment.record
+		assignment.record.ExpiryFromState = assignment.record.State
+		assignment.record.ExpiryReason = expiryReason
+		assignment.record.State = "expiring"
+		handler.appendHostLockEventLocked(assignment, "host-lock.expired", expiryReason)
+		if err := newHostAgentTransitionStore(handler.dataDir).Commit(assignment.record, handler.prepareRecoveredHostAgentTransition); err != nil {
+			assignment.record = previous
+			writeControlPlaneError(response, http.StatusInternalServerError, "persist Host Lock expiry")
+			return
+		}
+		agent.status.State = "cleaning"
+		if err := handler.persistHostAgentStatus(agent); err != nil {
+			writeControlPlaneError(response, http.StatusInternalServerError, "persist Host Lock expiry Agent status")
+			return
+		}
+	}
+	if assignment.record.State != "kept" && assignment.record.State != "expiring" {
+		writeControlPlaneError(response, http.StatusConflict, "Host Lock has no Kept Session action")
+		return
+	}
+	nextAction := "wait"
+	if assignment.record.State == "expiring" {
+		nextAction = "cleanup"
+	}
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(hostAgentActionResponse(assignment.record, handler.runtime.Now(), nextAction, expiryReason))
+}
+
+func hostAgentActionResponse(record hostAgentAssignmentRecord, now time.Time, action string, expiryReason string) hostAgentKeptResponse {
+	return hostAgentKeptResponse{
+		Version: hostAgentAPIVersion, Kind: "host-agent-kept-action", RunID: record.RunID, State: record.State,
+		Action: action, IdleDeadline: record.IdleDeadline, HardDeadline: record.HardDeadline,
+		KeepDeadline: record.KeepDeadline, KeepRemaining: hostLockDeadlineRemaining(record.KeepDeadline, now),
+		ExpiryFromState: record.ExpiryFromState, ExpiryReason: expiryReason,
+		BrokerSession: record.BrokerSession, DeadlineEvents: append([]hostLockDeadlineEvent(nil), record.DeadlineEvents...),
+	}
+}
+
+func (handler *controlPlaneHandler) appendHostLockEventLocked(assignment *controlPlaneHostAgentAssignment, event string, detail string) {
+	assignment.record.DeadlineEvents = append(assignment.record.DeadlineEvents, hostLockDeadlineEvent{
+		Type: event, Detail: detail, Timestamp: handler.runtime.Now().UTC().Format(time.RFC3339Nano),
+		Ordinal: len(assignment.record.DeadlineEvents) + 1,
+	})
+}
+
+func (handler *controlPlaneHandler) observeHostLockDeadlines() error {
+	type expiryCandidate struct {
+		assignment *controlPlaneHostAgentAssignment
+		runID      string
+	}
+	handler.mu.Lock()
+	candidates := make([]expiryCandidate, 0)
+	now := handler.runtime.Now()
+	for _, assignment := range handler.assignments {
+		if assignment != nil && !assignment.finishing && (assignment.record.State == "assigned" || assignment.record.State == "confirmed" || assignment.record.State == "kept") && assignment.record.expiryReason(now) != "" {
+			candidates = append(candidates, expiryCandidate{assignment: assignment, runID: assignment.record.RunID})
+		}
+	}
+	handler.mu.Unlock()
+	var observeErr error
+	for _, candidate := range candidates {
+		candidate.assignment.checkpointMu.Lock()
+		handler.mu.Lock()
+		assignment := handler.assignments[candidate.runID]
+		now = handler.runtime.Now()
+		if assignment == candidate.assignment && !assignment.finishing && (assignment.record.State == "assigned" || assignment.record.State == "confirmed" || assignment.record.State == "kept") {
+			reason := assignment.record.expiryReason(now)
+			if reason != "" {
+				previous := assignment.record
+				assignment.record.ExpiryFromState = assignment.record.State
+				assignment.record.ExpiryReason = reason
+				assignment.record.State = "expiring"
+				handler.appendHostLockEventLocked(assignment, "host-lock.expired", reason)
+				if err := newHostAgentTransitionStore(handler.dataDir).Commit(assignment.record, handler.prepareRecoveredHostAgentTransition); err != nil {
+					assignment.record = previous
+					observeErr = errors.Join(observeErr, err)
+				} else {
+					if agent := handler.hostAgents[assignment.record.AgentID]; agent != nil {
+						agent.status.State = "cleaning"
+						_ = handler.persistHostAgentStatus(agent)
+						handler.signalHostAgent(agent)
+					}
+				}
+			}
+		}
+		handler.mu.Unlock()
+		candidate.assignment.checkpointMu.Unlock()
+	}
+	return observeErr
 }
 
 func runLedgerEventLineCount(content []byte) int {
@@ -1645,6 +2053,9 @@ func mergeHostAgentTerminalEvents(current []byte, incoming []byte) ([]byte, erro
 	if len(currentLines) == 0 || len(incomingLines) == 0 {
 		return nil, fmt.Errorf("terminal event stream is empty")
 	}
+	if merged, authoritySuffix, err := mergeHostAgentTerminalEventsAfterAuthoritySuffix(currentLines, incoming); authoritySuffix {
+		return merged, err
+	}
 	gap := func(label string, lines [][]byte) (int, []byte, error) {
 		last := 0
 		var marker []byte
@@ -1714,6 +2125,121 @@ func mergeHostAgentTerminalEvents(current []byte, incoming []byte) ([]byte, erro
 	return mergeHostAgentProgressEvents(current, append(bytes.Join(sanitized, []byte{'\n'}), '\n'))
 }
 
+func mergeHostAgentTerminalEventsAfterAuthoritySuffix(currentLines [][]byte, incoming []byte) ([]byte, bool, error) {
+	var baseLines [][]byte
+	var authorityLines [][]byte
+	var stagedExecutionLines [][]byte
+	authoritySeen := false
+	stagedExecutionSeen := false
+	for _, line := range currentLines {
+		var event map[string]any
+		if err := json.Unmarshal(line, &event); err != nil {
+			return nil, false, fmt.Errorf("invalid current event identity")
+		}
+		id, authority := event["deadlineEventId"].(string)
+		if authority && id != "" {
+			if stagedExecutionSeen {
+				return nil, true, fmt.Errorf("Host Lock authority event follows staged execution") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+			}
+			authoritySeen = true
+			authorityLines = append(authorityLines, line)
+			continue
+		}
+		if authoritySeen {
+			stagedExecutionSeen = true
+			stagedExecutionLines = append(stagedExecutionLines, line)
+		} else {
+			baseLines = append(baseLines, line)
+		}
+	}
+	if !authoritySeen {
+		return nil, false, nil
+	}
+	if len(baseLines) == 0 {
+		return nil, true, fmt.Errorf("Host Lock authority events have no acknowledged execution prefix") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	mergedExecution, err := mergeHostAgentProgressEvents(append(bytes.Join(baseLines, []byte{'\n'}), '\n'), incoming)
+	if err != nil {
+		return nil, true, err
+	}
+	lastBaseSequence := 0
+	for _, line := range baseLines {
+		var event map[string]any
+		if err := json.Unmarshal(line, &event); err != nil {
+			return nil, true, fmt.Errorf("invalid acknowledged execution event")
+		}
+		if sequence := ledgerEventSequence(event); sequence > lastBaseSequence {
+			lastBaseSequence = sequence
+		}
+	}
+	result := append([][]byte(nil), baseLines...)
+	nextSequence := lastBaseSequence + 1
+	for _, line := range authorityLines {
+		var event map[string]any
+		if err := json.Unmarshal(line, &event); err != nil {
+			return nil, true, fmt.Errorf("invalid Host Lock authority event")
+		}
+		if ledgerEventSequence(event) != nextSequence {
+			return nil, true, fmt.Errorf("Host Lock authority event sequence changed") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		nextSequence++
+		result = append(result, line)
+	}
+	mergedExecutionLines := make([][]byte, 0)
+	for _, line := range bytes.Split(bytes.TrimSpace(mergedExecution), []byte{'\n'}) {
+		var event map[string]any
+		if err := json.Unmarshal(line, &event); err != nil {
+			return nil, true, fmt.Errorf("invalid incoming terminal event")
+		}
+		if ledgerEventSequence(event) <= lastBaseSequence {
+			continue
+		}
+		if id, authority := event["deadlineEventId"].(string); authority && id != "" {
+			continue
+		}
+		event["sequence"] = nextSequence
+		nextSequence++
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			return nil, true, err
+		}
+		mergedExecutionLines = append(mergedExecutionLines, encoded)
+	}
+	if len(stagedExecutionLines) > len(mergedExecutionLines) {
+		return nil, true, fmt.Errorf("incoming terminal events are older than the staged execution tail")
+	}
+	for index, staged := range stagedExecutionLines {
+		same, err := sameHostAgentEventIgnoringSequence(staged, mergedExecutionLines[index])
+		if err != nil {
+			return nil, true, err
+		}
+		if !same {
+			return nil, true, fmt.Errorf("staged terminal event %d changed", index+1)
+		}
+	}
+	result = append(result, mergedExecutionLines...)
+	normalized := append(bytes.Join(result, []byte{'\n'}), '\n')
+	current := append(bytes.Join(currentLines, []byte{'\n'}), '\n')
+	if bytes.Equal(normalized, current) {
+		return current, true, nil
+	}
+	return normalized, true, nil
+}
+
+func sameHostAgentEventIgnoringSequence(left []byte, right []byte) (bool, error) {
+	var leftEvent map[string]any
+	if err := json.Unmarshal(left, &leftEvent); err != nil {
+		return false, fmt.Errorf("invalid staged terminal event")
+	}
+	var rightEvent map[string]any
+	if err := json.Unmarshal(right, &rightEvent); err != nil {
+		return false, fmt.Errorf("invalid merged terminal event")
+	}
+	delete(leftEvent, "sequence")
+	delete(rightEvent, "sequence")
+	return reflect.DeepEqual(leftEvent, rightEvent), nil
+}
+
 func (handler *controlPlaneHandler) serveHostAgentComplete(response http.ResponseWriter, request *http.Request, agentID string, runID string) {
 	if validateRunID(runID) != nil {
 		writeControlPlaneError(response, http.StatusBadRequest, "invalid Host Agent Run ID")
@@ -1760,7 +2286,7 @@ func (handler *controlPlaneHandler) serveHostAgentComplete(response http.Respons
 		_ = json.NewEncoder(response).Encode(terminal)
 		return
 	}
-	if completion.Version != hostAgentAPIVersion || completion.RunID != runID || assignment == nil || assignment.record.AgentID != agentID || agent == nil || !sameLockToken(completion.LockToken, assignment.record.LockToken) || assignment.record.State != "confirmed" || assignment.finishing || !handler.acceptHostAgentSession(agent, completion.SessionID) {
+	if completion.Version != hostAgentAPIVersion || completion.RunID != runID || assignment == nil || assignment.record.AgentID != agentID || agent == nil || !sameLockToken(completion.LockToken, assignment.record.LockToken) || !hostAgentAssignmentAcceptsCompletion(assignment.record, completion.Terminal) || assignment.finishing || !handler.acceptHostAgentSession(agent, completion.SessionID) {
 		handler.mu.Unlock()
 		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
 		return
@@ -1771,7 +2297,7 @@ func (handler *controlPlaneHandler) serveHostAgentComplete(response http.Respons
 	handler.mu.Lock()
 	assignment = handler.assignments[runID]
 	agent = handler.hostAgents[agentID]
-	if completion.Version != hostAgentAPIVersion || completion.RunID != runID || assignment == nil || assignment.record.AgentID != agentID || agent == nil || !requestMatchesHostAgentCredential(request, agent) || !sameLockToken(completion.LockToken, assignment.record.LockToken) || assignment.record.State != "confirmed" || assignment.finishing || !handler.acceptHostAgentSession(agent, completion.SessionID) {
+	if completion.Version != hostAgentAPIVersion || completion.RunID != runID || assignment == nil || assignment.record.AgentID != agentID || agent == nil || !requestMatchesHostAgentCredential(request, agent) || !sameLockToken(completion.LockToken, assignment.record.LockToken) || !hostAgentAssignmentAcceptsCompletion(assignment.record, completion.Terminal) || assignment.finishing || !handler.acceptHostAgentSession(agent, completion.SessionID) {
 		handler.mu.Unlock()
 		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
 		return
@@ -1788,6 +2314,18 @@ func (handler *controlPlaneHandler) serveHostAgentComplete(response http.Respons
 		handler.mu.Unlock()
 		writeControlPlaneError(response, http.StatusBadRequest, "invalid Windows Host Agent completion")
 		return
+	}
+	if assignment.record.State == "expiring" && assignment.record.ExpiryFromState == "confirmed" && completion.Terminal.Status == resultStatusPassed {
+		outcome, terminalLedger, err = handler.convertDeadlineRacedHostAgentCompletion(assignment, terminalLedger)
+		if err != nil {
+			handler.mu.Lock()
+			if current := handler.assignments[runID]; current == assignment {
+				assignment.finishing = false
+			}
+			handler.mu.Unlock()
+			writeControlPlaneError(response, http.StatusInternalServerError, "convert deadline-raced Windows Host Agent completion")
+			return
+		}
 	}
 	assignment.originalLedger = &originalLedger
 	assignment.terminalLedger = &terminalLedger
@@ -1818,7 +2356,35 @@ func (handler *controlPlaneHandler) serveHostAgentFail(response http.ResponseWri
 		writeControlPlaneError(response, http.StatusUnauthorized, "Windows Host Agent authentication changed")
 		return
 	}
-	if assignment == nil || assignment.record.AgentID != agentID || agent == nil || !sameLockToken(failure.LockToken, assignment.record.LockToken) || assignment.record.State != "confirmed" || assignment.finishing || !handler.acceptHostAgentSession(agent, failure.SessionID) {
+	if assignment == nil {
+		handler.mu.Unlock()
+		var completed hostAgentAssignmentRecord
+		err := readPrivateJSON(filepath.Join(handler.dataDir, "assignments", runID+".json"), &completed)
+		if err == nil && completed.State == "completed" && completed.AgentID == agentID && sameLockToken(failure.LockToken, completed.LockToken) && completed.Terminal != nil {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(completed.Terminal)
+			return
+		}
+		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
+		return
+	}
+	if assignment != nil && assignment.record.State == "finishing" {
+		if failure.RunID != runID || assignment.record.AgentID != agentID || agent == nil || failure.Quarantine || !sameLockToken(failure.LockToken, assignment.record.LockToken) || !handler.acceptHostAgentSession(agent, failure.SessionID) {
+			handler.mu.Unlock()
+			writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
+			return
+		}
+		terminal, err := handler.resumeFinishingHostAgentAssignment(assignment, agent)
+		handler.mu.Unlock()
+		if err != nil {
+			writeControlPlaneError(response, http.StatusInternalServerError, "resume Windows Host Agent failure")
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(terminal)
+		return
+	}
+	if assignment == nil || assignment.record.AgentID != agentID || agent == nil || !sameLockToken(failure.LockToken, assignment.record.LockToken) || !hostAgentAssignmentAcceptsFailure(assignment.record, failure.Quarantine) || assignment.finishing || !handler.acceptHostAgentSession(agent, failure.SessionID) {
 		handler.mu.Unlock()
 		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
 		return
@@ -1840,7 +2406,7 @@ func (handler *controlPlaneHandler) serveHostAgentFail(response http.ResponseWri
 	handler.mu.Lock()
 	assignment = handler.assignments[runID]
 	agent = handler.hostAgents[agentID]
-	if assignment == nil || assignment.record.AgentID != agentID || agent == nil || !requestMatchesHostAgentCredential(request, agent) || !sameLockToken(failure.LockToken, assignment.record.LockToken) || assignment.record.State != "confirmed" || assignment.finishing || !handler.acceptHostAgentSession(agent, failure.SessionID) {
+	if assignment == nil || assignment.record.AgentID != agentID || agent == nil || !requestMatchesHostAgentCredential(request, agent) || !sameLockToken(failure.LockToken, assignment.record.LockToken) || !hostAgentAssignmentAcceptsFailure(assignment.record, failure.Quarantine) || assignment.finishing || !handler.acceptHostAgentSession(agent, failure.SessionID) {
 		handler.mu.Unlock()
 		writeControlPlaneError(response, http.StatusConflict, "Host Lock ownership changed")
 		return
@@ -1915,7 +2481,7 @@ func (handler *controlPlaneHandler) quarantineHostAgentAssignment(assignment *co
 	if assignment.record.State == "quarantined" && assignment.finished {
 		return assignment.outcome, assignment.err, nil
 	}
-	if assignment.record.State != "confirmed" && assignment.record.State != "quarantined" {
+	if !hostAgentAssignmentFinalizable(assignment.record) && assignment.record.State != "quarantined" {
 		ownershipErr := errors.New("Host Lock ownership changed") //nolint:staticcheck // Host Lock is a product term.
 		return runOutcome{}, ownershipErr, ownershipErr
 	}
@@ -1997,7 +2563,7 @@ func (handler *controlPlaneHandler) quarantineHostAgentAssignmentLocked(assignme
 func (handler *controlPlaneHandler) resetHostAgentFinishing(assignment *controlPlaneHostAgentAssignment) error {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
-	if handler.assignments[assignment.record.RunID] == assignment && assignment.record.State == "confirmed" {
+	if handler.assignments[assignment.record.RunID] == assignment && hostAgentAssignmentFinalizable(assignment.record) {
 		if assignment.originalLedger != nil {
 			if err := newRunLedgerStore(assignment.repoDir).Replace(*assignment.originalLedger); err != nil {
 				return err
@@ -2012,7 +2578,7 @@ func (handler *controlPlaneHandler) finishHostAgentAssignment(assignment *contro
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 	current := handler.assignments[assignment.record.RunID]
-	if current != assignment || assignment.record.State != "confirmed" || !assignment.finishing {
+	if current != assignment || !hostAgentAssignmentFinalizable(assignment.record) || !assignment.finishing {
 		return fmt.Errorf("Host Lock ownership changed") //nolint:staticcheck // Host Lock is a product term.
 	}
 	agent := handler.hostAgents[assignment.record.AgentID]
@@ -2029,34 +2595,44 @@ func (handler *controlPlaneHandler) finishHostAgentAssignment(assignment *contro
 		return err
 	}
 	assignment.record = finishing
-	if cleanupErr := cleanupRunState(assignment.repoDir, assignment.record.RunID); cleanupErr != nil {
-		return handler.quarantineHostAgentCleanupFailure(assignment, agent, outcome, cleanupErr)
-	}
-	if assignment.sharedFakeHostRelease != nil {
-		if sharedLockErr := assignment.sharedFakeHostRelease(); sharedLockErr != nil {
-			return handler.quarantineHostAgentCleanupFailure(assignment, agent, outcome, sharedLockErr)
-		}
-		assignment.sharedFakeHostRelease = nil
-	}
-	completed := finishing
-	completed.State = "completed"
-	if err := newHostAgentTransitionStore(handler.dataDir).Commit(completed, handler.prepareRecoveredHostAgentTransition); err != nil {
-		return err
-	}
-	assignment.record = completed
 	assignment.outcome = outcome
 	assignment.err = runErr
+	if !agent.status.DeadlineActions {
+		_, err := handler.resumeFinishingHostAgentAssignment(assignment, agent)
+		return err
+	}
 	assignment.finishing = false
-	assignment.finished = true
-	agent.status.State = "offline"
-	agent.status.RunID = ""
-	agent.status.SessionID = ""
-	agent.sessionExpiresAt = time.Time{}
+	agent.status.State = "cleaning"
 	_ = handler.persistHostAgentStatus(agent)
-	close(assignment.done)
-	delete(handler.assignments, assignment.record.RunID)
 	handler.signalHostAgent(agent)
 	return nil
+}
+
+func hostAgentAssignmentAcceptsCompletion(record hostAgentAssignmentRecord, terminal runCommandJSON) bool {
+	if record.State == "confirmed" {
+		return true
+	}
+	if record.State != "expiring" {
+		return false
+	}
+	if record.ExpiryFromState == "kept" {
+		return true
+	}
+	// A passed terminal is only admission to deep cleanup-proof validation.
+	// The handler converts valid raced success to deadline failure before commit.
+	return record.ExpiryFromState == "confirmed"
+}
+
+func hostAgentAssignmentFinalizable(record hostAgentAssignmentRecord) bool {
+	return record.State == "confirmed" || record.State == "expiring"
+}
+
+func hostAgentAssignmentAcceptsFailure(record hostAgentAssignmentRecord, quarantine bool) bool {
+	if quarantine {
+		return hostAgentAssignmentFinalizable(record)
+	}
+	return record.State == "confirmed" ||
+		record.State == "expiring" && (record.ExpiryFromState == "assigned" || record.ExpiryFromState == "confirmed" && record.BrokerSession == nil)
 }
 
 func (handler *controlPlaneHandler) resumeFinishingHostAgentAssignment(assignment *controlPlaneHostAgentAssignment, agent *controlPlaneHostAgent) (runCommandJSON, error) {
@@ -2081,7 +2657,16 @@ func (handler *controlPlaneHandler) resumeFinishingHostAgentAssignment(assignmen
 	}
 	assignment.record = completed
 	assignment.outcome = runOutcomeFromCommandJSON(*completed.Terminal)
-	assignment.err = nil
+	if assignment.err == nil && completed.Terminal.Status == resultStatusFailed {
+		diagnostic := completed.Terminal.Diagnostic
+		if diagnostic == "" {
+			diagnostic = completed.Terminal.Error
+		}
+		if diagnostic == "" {
+			diagnostic = "Windows Host Agent run failed before cleanup acknowledgement" //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		assignment.err = errors.New(diagnostic)
+	}
 	assignment.finishing = false
 	if !assignment.finished {
 		assignment.finished = true
@@ -2160,9 +2745,6 @@ func sameLockToken(got string, want string) bool {
 }
 
 func (handler *controlPlaneHandler) runScenarioThroughHostAgent(repoDir string, submission controlPlaneSubmission, options runOptions, runtime runRuntime) (runOutcome, error) {
-	if submission.StopAfter != stopAfterAlways {
-		return failHostAgentSelection(repoDir, options, runtime, errors.New("registered Windows Host Agent runs require stop-after always"))
-	}
 	targetProfile := submission.TargetProfile
 	if targetProfile == "" {
 		targetProfile = "default"
@@ -2232,6 +2814,7 @@ func (handler *controlPlaneHandler) runScenarioThroughHostAgent(repoDir string, 
 		LockToken: lockToken, State: "assigned", CreatedAt: createdAt, Submission: submission, EventPrefix: eventPrefix,
 		Capabilities: selectedCapabilities, SelectedMayaBuild: selectedMayaBuild, SessionBindingRequired: selected.status.SessionBinding, AssignedLedger: &assignedLedger,
 	}
+	record.hostLockDeadlines = newHostLockDeadlines(handler.runtime.Now(), handler.hostLockPolicy)
 	targetProfile = record.Submission.TargetProfile
 	if targetProfile == "" {
 		targetProfile = "default"
@@ -2624,6 +3207,150 @@ func (handler *controlPlaneHandler) acceptHostAgentCompletion(assignment *contro
 	return stagedOutcome, original, merged, nil
 }
 
+func (handler *controlPlaneHandler) convertDeadlineRacedHostAgentCompletion(assignment *controlPlaneHostAgentAssignment, record runLedgerRecord) (runOutcome, runLedgerRecord, error) {
+	diagnostic := "active Host Lock deadline expired before its Windows Host Agent reported completion" //nolint:staticcheck // Product terms preserve the user-facing diagnostic.
+	failure := &runFailureEvidence{
+		FailedLayer: string(failureLayerRunState), Diagnostic: diagnostic,
+		RemediationHint: earlyFailureRemediation(failureLayerRunState), CaptureState: "completed", CleanupState: "completed",
+	}
+	evidenceDir, err := safeControlPlaneEvidenceDir(assignment.repoDir, record)
+	if err != nil {
+		return runOutcome{}, record, err
+	}
+	evidence, err := readControlPlaneEvidence(assignment.repoDir, record)
+	if err != nil {
+		return runOutcome{}, record, err
+	}
+	evidence.Bundle.Status = resultStatusFailed
+	evidence.Bundle.Failure = failure
+	evidence.Bundle.Artifacts = buildEvidenceBundleCatalog(evidence.Bundle)
+	if evidence.Bundle.ScenarioResult != "" {
+		clean := cleanEvidenceArtifactPath(evidence.Bundle.ScenarioResult)
+		if clean == "" {
+			return runOutcome{}, record, fmt.Errorf("invalid deadline-raced Scenario Result path")
+		}
+		if err := ensureWorkspacePathHasNoSymlinkAncestor(evidenceDir, clean); err != nil {
+			return runOutcome{}, record, err
+		}
+		result := newScenarioResultDocument(ScenarioResult{Status: resultStatusFailed, Summary: diagnostic})
+		if err := writeJSONFile(filepath.Join(evidenceDir, filepath.FromSlash(clean)), result.Fields); err != nil {
+			return runOutcome{}, record, err
+		}
+	}
+	if err := writeJSONFile(filepath.Join(evidenceDir, evidenceBundleFileName), evidence.Bundle); err != nil {
+		return runOutcome{}, record, err
+	}
+	now := handler.runtime.Now()
+	record.State = "failed"
+	record.Status = resultStatusFailed
+	record.UpdatedAt = now.UTC().Format(time.RFC3339Nano)
+	record.CompletedAt = record.UpdatedAt
+	policy := defaultRunLedgerPolicy()
+	if configured, ok := availableRunLedgerPolicy(assignment.repoDir); ok {
+		policy = configured
+	}
+	store := newRunLedgerStore(assignment.repoDir)
+	if err := store.SyncArtifacts(&record, policy); err != nil {
+		return runOutcome{}, record, err
+	}
+	if err := store.Replace(record); err != nil {
+		return runOutcome{}, record, err
+	}
+	outcome := runOutcome{
+		RunID: record.RunID, Scenario: record.Scenario, TargetProfile: record.TargetProfile, Host: record.Host,
+		StateDir: "/v1/runs/" + record.RunID + "/status", EvidenceDir: "/v1/runs/" + record.RunID + "/evidence",
+		Result: ScenarioResult{Status: resultStatusFailed, Summary: diagnostic}, StopPolicy: "stopped", Accepted: true, Failure: failure,
+	}
+	return outcome, record, nil
+}
+
+func appendHostLockDeadlineEventsToLedger(repoDir string, record *runLedgerRecord, events []hostLockDeadlineEvent, now time.Time) error {
+	if len(events) == 0 {
+		return nil
+	}
+	var updated runLedgerRecord
+	err := newRunLedgerStore(repoDir).UpdateSnapshot(record.RunID, func(snapshot *runLedgerSnapshot) error {
+		existingIDs := make(map[string]struct{})
+		lastSequence := 0
+		for _, line := range bytes.Split(snapshot.Events, []byte{'\n'}) {
+			if len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			var event map[string]any
+			if err := json.Unmarshal(line, &event); err != nil {
+				return err
+			}
+			if sequence := ledgerEventSequence(event); sequence > lastSequence {
+				lastSequence = sequence
+			}
+			if id, ok := event["deadlineEventId"].(string); ok && id != "" {
+				existingIDs[id] = struct{}{}
+			}
+		}
+		combined := append([]byte(nil), snapshot.Events...)
+		appended := false
+		for _, event := range events {
+			id := hostLockDeadlineEventID(event)
+			if _, exists := existingIDs[id]; exists {
+				continue
+			}
+			existingIDs[id] = struct{}{}
+			appended = true
+			lastSequence++
+			content, err := json.Marshal(map[string]any{
+				"event": event.Type, "type": event.Type, "timestamp": event.Timestamp,
+				"phase": "retention", "stream": "lifecycle", "sequence": lastSequence,
+				"detail": event.Detail, "details": map[string]any{"message": event.Detail},
+				"deadlineEventId": id,
+			})
+			if err != nil {
+				return err
+			}
+			combined = append(combined, content...)
+			combined = append(combined, '\n')
+		}
+		eventCount, eventsOmitted, eventsTruncated, err := retainedRunLedgerEventMetadata(bytes.NewReader(combined))
+		if err != nil {
+			return err
+		}
+		snapshot.Events = combined
+		snapshot.Record.EventCount = eventCount
+		snapshot.Record.EventsOmitted = eventsOmitted
+		snapshot.Record.EventsTruncated = eventsTruncated
+		snapshot.Record.EventBytes = len(combined)
+		if appended {
+			snapshot.Record.UpdatedAt = now.UTC().Format(time.RFC3339Nano)
+		}
+		updated = snapshot.Record
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	*record = updated
+	return nil
+}
+
+func syncHostAgentDeadlineEvents(repoDir string, runID string, events []hostLockDeadlineEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	record, err := newRunLedgerStore(repoDir).Read(runID)
+	if err != nil {
+		return err
+	}
+	eventTime, err := time.Parse(time.RFC3339Nano, events[len(events)-1].Timestamp)
+	if err != nil {
+		return fmt.Errorf("invalid Host Lock deadline event timestamp: %w", err)
+	}
+	return appendHostLockDeadlineEventsToLedger(repoDir, &record, events, eventTime)
+}
+
+func hostLockDeadlineEventID(event hostLockDeadlineEvent) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", event.Type, event.Detail, event.Timestamp, event.Ordinal)))
+	return hex.EncodeToString(sum[:])
+}
+
 func validHostAgentCompletionSession(required bool, status string, lockSession *brokerSessionIdentity, evidenceSession *brokerSessionIdentity) bool {
 	if !required {
 		return true
@@ -2743,6 +3470,225 @@ func copyHostAgentResultFiles(repoDir string, files []controlPlaneFile, runID st
 	return nil
 }
 
+func hostAgentMutationOutboxPath(workRoot string, runID string) string {
+	return filepath.Join(workRoot, "completion-outbox", runID+".json")
+}
+
+func persistHostAgentMutationOutbox(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, outbox hostAgentMutationOutbox) error {
+	if err := ensureHostAgentDirectory(filepath.Join(options.WorkRoot, "completion-outbox")); err != nil {
+		return err
+	}
+	outbox.Version = hostAgentAPIVersion
+	outbox.RunID = assignment.RunID
+	outbox.LockToken = assignment.LockToken
+	return writePrivateJSON(hostAgentMutationOutboxPath(options.WorkRoot, assignment.RunID), outbox)
+}
+
+func persistHostAgentCleanupOutbox(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, brokerSession *brokerSessionIdentity, expiryFromState string) error {
+	if brokerSession == nil {
+		return fmt.Errorf("Host Lock cleanup has no exact Maya UI Session identity") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	cleanup := hostAgentCleanupMutation{BrokerSession: *brokerSession, ExpiryFromState: expiryFromState}
+	return persistHostAgentMutationOutbox(options, assignment, hostAgentMutationOutbox{
+		Kind: "cleanup", Cleanup: &cleanup,
+	})
+}
+
+func removeHostAgentMutationOutbox(workRoot string, runID string) error {
+	path := hostAgentMutationOutboxPath(workRoot, runID)
+	if err := ensureHostAgentDirectory(filepath.Dir(path)); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return syncRunLedgerDirectory(filepath.Dir(path))
+}
+
+func reconcileAcknowledgedHostAgentOutbox(options hostAgentRunOnceOptions, runtime runRuntime, stdout io.Writer) error {
+	dir := filepath.Join(options.WorkRoot, "completion-outbox")
+	if err := ensureHostAgentDirectory(dir); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || validateRunID(strings.TrimSuffix(entry.Name(), ".json")) != nil {
+			return fmt.Errorf("invalid Windows Host Agent completion outbox entry %s", entry.Name()) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		runID := strings.TrimSuffix(entry.Name(), ".json")
+		path := filepath.Join(dir, entry.Name())
+		var outbox hostAgentMutationOutbox
+		if err := readPrivateJSON(path, &outbox); err != nil {
+			return err
+		}
+		if outbox.Version != hostAgentAPIVersion || outbox.RunID != runID || outbox.LockToken == "" || outbox.Kind != "complete" && outbox.Kind != "fail" {
+			return fmt.Errorf("unacknowledged Windows Host Agent outbox %s requires its durable assignment", entry.Name()) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		assignment := hostAgentAssignmentResponse{
+			Version: hostAgentAPIVersion, Kind: "host-agent-assignment", RunID: runID,
+			AgentID: options.AgentID, HostID: options.HostID, LockToken: outbox.LockToken, Action: "finish",
+		}
+		replayed, replayErr := replayHostAgentMutationOutbox(options, assignment, runtime, stdout)
+		if !replayed {
+			return fmt.Errorf("Windows Host Agent outbox %s was not reconciled", entry.Name()) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		if _, err := os.Stat(path); err == nil {
+			return errors.Join(fmt.Errorf("Windows Host Agent outbox %s remains unacknowledged", entry.Name()), replayErr) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanHostAgentRunRoot(workRoot string, runID string) error {
+	runRoot := filepath.Join(workRoot, "runs", runID)
+	if err := os.RemoveAll(runRoot); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(runRoot); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("verify Windows Host Agent workspace cleanup: %w", err) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	return nil
+}
+
+func replayHostAgentMutationOutbox(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, runtime runRuntime, stdout io.Writer) (bool, error) {
+	path := hostAgentMutationOutboxPath(options.WorkRoot, assignment.RunID)
+	if err := ensureHostAgentDirectory(filepath.Dir(path)); err != nil {
+		return true, err
+	}
+	var outbox hostAgentMutationOutbox
+	if err := readPrivateJSON(path, &outbox); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return true, err
+	}
+	if outbox.Version != hostAgentAPIVersion || outbox.RunID != assignment.RunID || !sameLockToken(outbox.LockToken, assignment.LockToken) {
+		return true, fmt.Errorf("Windows Host Agent completion outbox ownership changed") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	if outbox.Kind == "fail" && outbox.Failure != nil && assignment.Action == "cleanup" {
+		// Once durable authority orders exact-session cleanup, a failure mutation
+		// that was never accepted cannot supersede that recoverable action.
+		if err := removeHostAgentMutationOutbox(options.WorkRoot, assignment.RunID); err != nil {
+			return true, err
+		}
+		return false, nil
+	}
+	// A completion outbox already contains the stopped-session evidence and all
+	// durable result files. Replay lets the server validate that stronger proof;
+	// a raced success is converted to deadline failure before lock release.
+	switch outbox.Kind {
+	case "cleanup":
+		if outbox.Cleanup == nil || outbox.Completion != nil || outbox.Failure != nil || !sameBrokerSession(&outbox.Cleanup.BrokerSession, assignment.BrokerSession) || outbox.Cleanup.ExpiryFromState != "kept" && outbox.Cleanup.ExpiryFromState != "confirmed" {
+			return true, fmt.Errorf("invalid Windows Host Agent cleanup outbox") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		repoDir := filepath.Join(options.WorkRoot, "runs", assignment.RunID, "repo")
+		stateDir := filepath.Join(repoDir, ".maya-stall", "state", "runs", assignment.RunID)
+		if _, err := os.Lstat(stateDir); err == nil {
+			if err := verifyKeptSessionCleanupIdentity(repoDir, assignment.RunID, assignment.HostID, assignment.BrokerSession); err != nil {
+				return true, err
+			}
+			if err := stopRun(repoDir, assignment.RunID, runtime.Now); err != nil {
+				return true, err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return true, err
+		}
+		var cleanupErr error
+		if outbox.Cleanup.ExpiryFromState == "confirmed" {
+			cleanupErr = errors.New("active Host Lock deadline expired before its Windows Host Agent reported completion") //nolint:staticcheck // Product terms preserve the user-facing diagnostic.
+		}
+		return true, completeStoppedExpiredHostAgentAssignment(options, assignment, runtime, cleanupErr, stdout)
+	case "complete":
+		if outbox.Cleanup != nil || outbox.Completion == nil || outbox.Failure != nil {
+			return true, fmt.Errorf("invalid Windows Host Agent completion outbox") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		completion := *outbox.Completion
+		completion.SessionID = options.SessionID
+		var terminal runCommandJSON
+		endpoint := "/v1/host-agents/" + options.AgentID + "/assignments/" + assignment.RunID + "/complete"
+		if assignment.Action != "finish" {
+			if err := postHostAgentCompletion(options, endpoint, completion, runtime, &terminal); err != nil {
+				return true, err
+			}
+		}
+		if err := cleanHostAgentRunRoot(options.WorkRoot, assignment.RunID); err != nil {
+			return true, err
+		}
+		if err := postHostAgentCompletion(options, endpoint, completion, runtime, &terminal); err != nil {
+			return true, err
+		}
+		if err := removeHostAgentMutationOutbox(options.WorkRoot, assignment.RunID); err != nil {
+			return true, err
+		}
+		_, _ = fmt.Fprintf(stdout, "agent: %s\nhost: %s\nrun: %s\nstatus: %s\n", options.AgentID, options.HostID, assignment.RunID, terminal.Status)
+		if terminal.Status == resultStatusFailed {
+			return true, errors.New("replayed failed Windows Host Agent completion") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		return true, nil
+	case "fail":
+		if outbox.Cleanup != nil || outbox.Failure == nil || outbox.Completion != nil {
+			return true, fmt.Errorf("invalid Windows Host Agent failure outbox") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		failure := *outbox.Failure
+		failure.SessionID = options.SessionID
+		var terminal runCommandJSON
+		endpoint := "/v1/host-agents/" + options.AgentID + "/assignments/" + assignment.RunID + "/fail"
+		if assignment.Action != "finish" {
+			if err := postHostAgentMutation(options, endpoint, failure, runtime, &terminal); err != nil {
+				return true, err
+			}
+		}
+		if err := cleanHostAgentRunRoot(options.WorkRoot, assignment.RunID); err != nil {
+			return true, err
+		}
+		if err := postHostAgentMutation(options, endpoint, failure, runtime, &terminal); err != nil {
+			return true, err
+		}
+		if err := removeHostAgentMutationOutbox(options.WorkRoot, assignment.RunID); err != nil {
+			return true, err
+		}
+		return true, errors.New(failure.Diagnostic)
+	default:
+		return true, fmt.Errorf("unsupported Windows Host Agent completion outbox kind %q", outbox.Kind) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+}
+
+func finishHostAgentCompletion(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, completion hostAgentCompletionRequest, runtime runRuntime, stdout io.Writer) error {
+	copy := completion
+	if err := persistHostAgentMutationOutbox(options, assignment, hostAgentMutationOutbox{
+		Kind: "complete", Completion: &copy,
+	}); err != nil {
+		return err
+	}
+	var terminal runCommandJSON
+	endpoint := "/v1/host-agents/" + options.AgentID + "/assignments/" + assignment.RunID + "/complete"
+	if err := postHostAgentCompletion(options, endpoint, completion, runtime, &terminal); err != nil {
+		return err
+	}
+	if err := cleanHostAgentRunRoot(options.WorkRoot, assignment.RunID); err != nil {
+		return err
+	}
+	if err := postHostAgentCompletion(options, endpoint, completion, runtime, &terminal); err != nil {
+		return err
+	}
+	if err := removeHostAgentMutationOutbox(options.WorkRoot, assignment.RunID); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(stdout, "agent: %s\nhost: %s\nrun: %s\nstatus: %s\n", options.AgentID, options.HostID, assignment.RunID, terminal.Status)
+	if terminal.Status == resultStatusFailed {
+		diagnostic := terminal.Diagnostic
+		if diagnostic == "" {
+			diagnostic = "Windows Host Agent completion failed" //nolint:staticcheck // Product term starts the user-facing diagnostic.
+		}
+		return errors.New(diagnostic)
+	}
+	return nil
+}
+
 func runHostAgentOnce(options hostAgentRunOnceOptions, runtime runRuntime, stdout io.Writer) error {
 	if err := ensureHostAgentDirectory(options.WorkRoot); err != nil {
 		return err
@@ -2756,7 +3702,7 @@ func runHostAgentOnce(options hostAgentRunOnceOptions, runtime runRuntime, stdou
 	}
 	options.Capabilities = capabilities
 	registration := hostAgentRegistrationRequest{
-		Version: hostAgentAPIVersion, AgentID: options.AgentID, HostID: options.HostID, Slots: 1, SessionBinding: true,
+		Version: hostAgentAPIVersion, AgentID: options.AgentID, HostID: options.HostID, Slots: 1, SessionBinding: true, DeadlineActions: true,
 		Capabilities: capabilities,
 	}
 	var status hostAgentStatusResponse
@@ -2768,6 +3714,11 @@ func runHostAgentOnce(options hostAgentRunOnceOptions, runtime runRuntime, stdou
 		return fmt.Errorf("Control Plane did not return a Windows Host Agent session") //nolint:staticcheck // Product terms start the user-facing diagnostic.
 	}
 	options.SessionID = status.SessionID
+	if status.RunID == "" {
+		if err := reconcileAcknowledgedHostAgentOutbox(options, runtime, stdout); err != nil {
+			return err
+		}
+	}
 	stopHeartbeat, heartbeatErrors, executionCancel := startHostAgentHeartbeat(options, runtime)
 	defer stopHeartbeat()
 	if err := currentHostAgentHeartbeatError(heartbeatErrors); err != nil {
@@ -2779,6 +3730,15 @@ func runHostAgentOnce(options hostAgentRunOnceOptions, runtime runRuntime, stdou
 	}
 	if err := validateHostAgentAssignment(options, assignment); err != nil {
 		return err
+	}
+	if replayed, replayErr := replayHostAgentMutationOutbox(options, assignment, runtime, stdout); replayed {
+		return replayErr
+	}
+	if assignment.Action == "finish" {
+		return fmt.Errorf("finishing Windows Host Agent assignment has no durable terminal mutation outbox") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	if assignment.Action != "" && assignment.Action != "execute" {
+		return resumeKeptHostAgentAssignment(options, assignment, runtime, heartbeatErrors, stdout)
 	}
 	if err := currentHostAgentHeartbeatError(heartbeatErrors); err != nil {
 		return err
@@ -2838,40 +3798,101 @@ func runHostAgentOnce(options hostAgentRunOnceOptions, runtime runRuntime, stdou
 	if targetProfile == "" {
 		targetProfile = "default"
 	}
-	stopProgress := startHostAgentProgress(options, assignment, repoDir, runtime)
+	stopProgress := startHostAgentProgress(options, assignment, repoDir, runtime, executionCancel)
 	outcome, runErr := runScenario(repoDir, runOptions{
 		ScenarioName: assignment.Submission.Scenario, TargetProfile: targetProfile, HostPin: assignment.HostID,
 		HostConfig: hostConfigPath, StopAfter: assignment.Submission.StopAfter, KeepTTL: keepTTLOrDefault(assignment.Submission.KeepTTL), AssignedRunID: assignment.RunID, AssignedMayaBuild: assignment.SelectedMayaBuild,
-		AssignedEventPrefix: assignment.EventPrefix,
+		AssignedEventPrefix: assignment.EventPrefix, AssignedHardDeadline: assignment.HardDeadline,
 	}, agentRuntime)
 	progressErr := stopProgress()
 	operationalErr := errors.Join(runErr, progressErr)
 	heartbeatErr := currentHostAgentHeartbeatError(heartbeatErrors)
+	if progressErr != nil && isHostLockDeadlineError(progressErr) {
+		runErr = errors.Join(runErr, progressErr)
+		operationalErr = errors.Join(runErr, heartbeatErr)
+	}
 	if outcome.StopPolicy == "unresolved" || outcome.Failure != nil && outcome.Failure.CleanupState == "failed" {
 		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "stopping its Maya UI Session", errors.Join(operationalErr, heartbeatErr))
 	}
 	if heartbeatErr != nil {
-		return failConfirmedHostAgentAssignment(options, assignment, runtime, "renewing its process-session fence", errors.Join(operationalErr, heartbeatErr))
+		if !isHostLockDeadlineError(heartbeatErr) {
+			return failConfirmedHostAgentAssignment(options, assignment, runtime, "renewing its process-session fence", errors.Join(operationalErr, heartbeatErr))
+		}
+		runErr = errors.Join(runErr, heartbeatErr)
+		operationalErr = errors.Join(runErr, progressErr)
 	}
-	if progressErr != nil {
+	if progressErr != nil && !isHostLockDeadlineError(progressErr) {
 		return failConfirmedHostAgentAssignment(options, assignment, runtime, "checkpointing its active Run Ledger", operationalErr)
 	}
 	if outcome.Host != assignment.HostID || outcome.Scenario != assignment.Submission.Scenario || outcome.TargetProfile != targetProfile {
 		identityErr := fmt.Errorf("Windows Host Agent run did not reach the assigned Host identity") //nolint:staticcheck // Product term starts the user-facing diagnostic.
 		return failConfirmedHostAgentAssignment(options, assignment, runtime, "executing the assigned Scenario", errors.Join(runErr, identityErr))
 	}
+	if outcome.StopPolicy == "kept" {
+		keptAction, err := reportHostAgentKeptSession(options, assignment, outcome, runtime, repoDir, []string{repoDir, options.WorkRoot})
+		if err != nil {
+			return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "recording its Kept Session", errors.Join(runErr, err))
+		}
+		for keptAction.Action == "wait" {
+			if err := currentHostAgentHeartbeatError(heartbeatErrors); err != nil {
+				return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "renewing its kept Host Lock", errors.Join(runErr, err))
+			}
+			time.Sleep(time.Second)
+			keptAction, err = pollHostAgentKeptAction(options, assignment, runtime)
+			if err != nil {
+				return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "waiting for Kept Session expiry", errors.Join(runErr, err))
+			}
+		}
+		if keptAction.Action != "cleanup" {
+			return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "reading its Kept Session action", errors.Join(runErr, fmt.Errorf("unsupported Kept Session action %q", keptAction.Action)))
+		}
+		if keptAction.ExpiryFromState != "kept" && keptAction.ExpiryFromState != "confirmed" {
+			return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "reading its Kept Session expiry origin", errors.Join(runErr, fmt.Errorf("unsupported Host Lock expiry origin %q", keptAction.ExpiryFromState)))
+		}
+		if err := verifyKeptSessionCleanupIdentity(repoDir, assignment.RunID, assignment.HostID, keptAction.BrokerSession); err != nil {
+			return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "verifying its retained Maya UI Session identity", errors.Join(runErr, err))
+		}
+		if keptAction.ExpiryFromState == "kept" {
+			if err := syncHostAgentDeadlineEvents(repoDir, assignment.RunID, keptAction.DeadlineEvents); err != nil {
+				return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "synchronizing its Host Lock deadline events", errors.Join(runErr, err))
+			}
+		}
+		var expiredErr error
+		if keptAction.ExpiryFromState == "confirmed" {
+			expiredErr = errors.New("active Host Lock deadline expired before its Windows Host Agent reported completion") //nolint:staticcheck // Product terms preserve the user-facing diagnostic.
+			recovered, err := loadAcceptedHostAgentRun(repoDir, hostAgentAssignmentRecord{
+				RunID: assignment.RunID, HostID: assignment.HostID, Submission: assignment.Submission,
+			}, runtime)
+			if err != nil {
+				return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "loading its deadline-expired Run state", errors.Join(runErr, err))
+			}
+			recovered.host.HostID = assignment.HostID
+			recovered.manifest.Host = assignment.HostID
+			if err := recovered.ensureAcceptedFailureEvidence(expiredErr); err != nil {
+				return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "synthesizing its deadline-expired failure evidence", errors.Join(runErr, err))
+			}
+		}
+		if err := persistHostAgentCleanupOutbox(options, assignment, keptAction.BrokerSession, keptAction.ExpiryFromState); err != nil {
+			return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "journaling its retained Maya UI Session cleanup", errors.Join(runErr, err))
+		}
+		if err := stopRun(repoDir, assignment.RunID, runtime.Now); err != nil {
+			return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "expiring its exact retained Maya UI Session", errors.Join(runErr, err))
+		}
+		if expiredErr != nil {
+			return completeStoppedExpiredHostAgentAssignment(options, assignment, runtime, expiredErr, stdout)
+		}
+		outcome.StopPolicy = "stopped"
+		outcome.FollowUpCommands = nil
+	}
 	files, snapshotErr := buildHostAgentResultFilesSanitized(repoDir, assignment.RunID, []string{repoDir, options.WorkRoot})
 	if snapshotErr != nil {
 		return failConfirmedHostAgentAssignment(options, assignment, runtime, "collecting durable result state", errors.Join(runErr, snapshotErr))
 	}
-	if err := os.RemoveAll(runRoot); err != nil {
-		return failConfirmedHostAgentAssignment(options, assignment, runtime, "cleaning its run workspace", errors.Join(runErr, err))
-	}
-	if _, err := os.Lstat(runRoot); !errors.Is(err, os.ErrNotExist) {
-		return failConfirmedHostAgentAssignment(options, assignment, runtime, "verifying run workspace cleanup", errors.Join(runErr, err))
-	}
 	if err := currentHostAgentHeartbeatError(heartbeatErrors); err != nil {
-		return failConfirmedHostAgentAssignment(options, assignment, runtime, "renewing its process-session fence", errors.Join(runErr, err))
+		if !isHostLockDeadlineError(err) {
+			return failConfirmedHostAgentAssignment(options, assignment, runtime, "renewing its process-session fence", errors.Join(runErr, err))
+		}
+		runErr = errors.Join(runErr, err)
 	}
 	terminal := controlPlaneTerminalResponse(outcome, runErr, repoDir)
 	sanitizeHostAgentTerminal(&terminal, []string{repoDir, options.WorkRoot})
@@ -2879,16 +3900,199 @@ func runHostAgentOnce(options hostAgentRunOnceOptions, runtime runRuntime, stdou
 		Version: hostAgentAPIVersion, RunID: assignment.RunID, LockToken: assignment.LockToken,
 		SessionID: options.SessionID, Terminal: terminal, Files: files,
 	}
-	var responseTerminal runCommandJSON
-	completePath := "/v1/host-agents/" + options.AgentID + "/assignments/" + assignment.RunID + "/complete"
-	if err := postHostAgentCompletion(options, completePath, completion, runtime, &responseTerminal); err != nil {
+	if err := finishHostAgentCompletion(options, assignment, completion, runtime, stdout); err != nil {
 		return errors.Join(runErr, err)
 	}
-	_, _ = fmt.Fprintf(stdout, "agent: %s\nhost: %s\nrun: %s\nstatus: %s\n", options.AgentID, options.HostID, assignment.RunID, responseTerminal.Status)
 	return runErr
 }
 
-func startHostAgentProgress(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, repoDir string, runtime runRuntime) func() error {
+func resumeKeptHostAgentAssignment(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, runtime runRuntime, heartbeatErrors <-chan error, stdout io.Writer) error {
+	if assignment.KeepDeadline == "" {
+		return resumeExpiredActiveHostAgentAssignment(options, assignment, runtime)
+	}
+	action := hostAgentKeptResponse{Action: assignment.Action, DeadlineEvents: assignment.DeadlineEvents}
+	var err error
+	for action.Action == "wait" {
+		if err := currentHostAgentHeartbeatError(heartbeatErrors); err != nil {
+			return err
+		}
+		time.Sleep(time.Second)
+		action, err = pollHostAgentKeptAction(options, assignment, runtime)
+		if err != nil {
+			return err
+		}
+	}
+	if action.Action != "cleanup" {
+		return fmt.Errorf("Control Plane returned unsupported Kept Session action %q", action.Action) //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	runRoot := filepath.Join(options.WorkRoot, "runs", assignment.RunID)
+	repoDir := filepath.Join(runRoot, "repo")
+	if _, err := os.Lstat(repoDir); errors.Is(err, os.ErrNotExist) {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "reclaiming an expired retained Host Lock with missing Agent state", errors.New("expired retained assignment has no Agent run workspace"))
+	} else if err != nil {
+		return err
+	}
+	if err := verifyKeptSessionCleanupIdentity(repoDir, assignment.RunID, assignment.HostID, assignment.BrokerSession); err != nil {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "verifying its recovered retained Maya UI Session identity", err)
+	}
+	if err := syncHostAgentDeadlineEvents(repoDir, assignment.RunID, action.DeadlineEvents); err != nil {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "synchronizing its Host Lock deadline events", err)
+	}
+	if err := persistHostAgentCleanupOutbox(options, assignment, assignment.BrokerSession, "kept"); err != nil {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "journaling its recovered retained Maya UI Session cleanup", err)
+	}
+	if err := stopRun(repoDir, assignment.RunID, runtime.Now); err != nil {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "recovering its exact retained Maya UI Session", err)
+	}
+	return completeStoppedExpiredHostAgentAssignment(options, assignment, runtime, nil, stdout)
+}
+
+func resumeExpiredActiveHostAgentAssignment(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, runtime runRuntime) error {
+	expiredErr := errors.New("active Host Lock deadline expired before its Windows Host Agent reported completion") //nolint:staticcheck // Product terms preserve the user-facing diagnostic.
+	runRoot := filepath.Join(options.WorkRoot, "runs", assignment.RunID)
+	repoDir := filepath.Join(runRoot, "repo")
+	if assignment.BrokerSession == nil {
+		if assignment.ExpiryFromState == "assigned" {
+			return failConfirmedHostAgentAssignment(options, assignment, runtime, "reclaiming its unconfirmed expired Host Lock", expiredErr)
+		}
+		if _, err := os.Lstat(repoDir); errors.Is(err, os.ErrNotExist) {
+			return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "recovering an expired active assignment with missing Agent run state", expiredErr)
+		} else if err != nil {
+			return err
+		}
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "recovering an expired active assignment without an exact Maya UI Session identity", expiredErr)
+	}
+	if _, err := os.Lstat(repoDir); errors.Is(err, os.ErrNotExist) {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "recovering an expired active assignment with missing Agent run state", expiredErr)
+	} else if err != nil {
+		return err
+	}
+	if err := verifyKeptSessionCleanupIdentity(repoDir, assignment.RunID, assignment.HostID, assignment.BrokerSession); err != nil {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "verifying its expired active Maya UI Session identity", err)
+	}
+	recovered, err := loadAcceptedHostAgentRun(repoDir, hostAgentAssignmentRecord{
+		RunID: assignment.RunID, HostID: assignment.HostID, Submission: assignment.Submission,
+	}, runtime)
+	if err != nil {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "loading its expired active Run state", err)
+	}
+	recovered.host.HostID = assignment.HostID
+	recovered.manifest.Host = assignment.HostID
+	if err := recovered.ensureAcceptedFailureEvidence(expiredErr); err != nil {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "synthesizing its expired active failure evidence", err)
+	}
+	if err := persistHostAgentCleanupOutbox(options, assignment, assignment.BrokerSession, "confirmed"); err != nil {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "journaling its expired active Maya UI Session cleanup", err)
+	}
+	if err := stopRun(repoDir, assignment.RunID, runtime.Now); err != nil {
+		return quarantineConfirmedHostAgentAssignment(options, assignment, runtime, "stopping its exact expired active Maya UI Session", err)
+	}
+	return completeStoppedExpiredHostAgentAssignment(options, assignment, runtime, expiredErr, io.Discard)
+}
+
+func completeStoppedExpiredHostAgentAssignment(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, runtime runRuntime, runErr error, stdout io.Writer) error {
+	repoDir := filepath.Join(options.WorkRoot, "runs", assignment.RunID, "repo")
+	record, err := newRunLedgerStore(repoDir).Read(assignment.RunID)
+	if err != nil {
+		return err
+	}
+	result, err := readControlPlaneResult(repoDir, record)
+	if err != nil {
+		return err
+	}
+	outcome := runOutcome{
+		RunID: assignment.RunID, Scenario: record.Scenario, TargetProfile: record.TargetProfile, Host: record.Host,
+		StateDir: "/v1/runs/" + assignment.RunID + "/status", EvidenceDir: "/v1/runs/" + assignment.RunID + "/evidence",
+		Result: result.Result, Validators: result.Validators, StopPolicy: "stopped", Accepted: true,
+	}
+	if result.Status == resultStatusFailed && runErr == nil {
+		diagnostic := result.Result.Summary
+		evidence, evidenceErr := readControlPlaneEvidence(repoDir, record)
+		if evidenceErr != nil {
+			return evidenceErr
+		}
+		outcome.Failure = evidence.Bundle.Failure
+		if outcome.Failure != nil && outcome.Failure.Diagnostic != "" {
+			diagnostic = outcome.Failure.Diagnostic
+		}
+		if diagnostic == "" {
+			diagnostic = "retained Maya Stall run failed before deadline cleanup"
+		}
+		runErr = errors.New(diagnostic)
+	}
+	files, err := buildHostAgentResultFilesSanitized(repoDir, assignment.RunID, []string{repoDir, options.WorkRoot})
+	if err != nil {
+		return err
+	}
+	terminal := controlPlaneTerminalResponse(outcome, runErr, repoDir)
+	sanitizeHostAgentTerminal(&terminal, []string{repoDir, options.WorkRoot})
+	completion := hostAgentCompletionRequest{
+		Version: hostAgentAPIVersion, RunID: assignment.RunID, LockToken: assignment.LockToken,
+		SessionID: options.SessionID, Terminal: terminal, Files: files,
+	}
+	if err := finishHostAgentCompletion(options, assignment, completion, runtime, stdout); err != nil {
+		return errors.Join(runErr, err)
+	}
+	return runErr
+}
+
+func verifyKeptSessionCleanupIdentity(repoDir string, runID string, hostID string, expected *brokerSessionIdentity) error {
+	if expected == nil || expected.BrokerAdapter == "" || expected.SessionID == "" {
+		return fmt.Errorf("shared Host Lock has no exact retained Maya UI Session identity")
+	}
+	kept, err := readKeptRunState(repoDir, runID)
+	if err != nil {
+		return err
+	}
+	if kept.Manifest.RunID != runID || kept.Manifest.Host != hostID || !sameBrokerSession(kept.Manifest.BrokerSession, expected) {
+		return fmt.Errorf("retained Maya UI Session identity does not match the shared Host Lock")
+	}
+	if kept.Record.RunID != runID || kept.Record.Host != hostID || kept.Record.HostConfig.ID != hostID || kept.Record.RemoteSession.BrokerAdapter != expected.BrokerAdapter || kept.Record.RemoteSession.SessionID != expected.SessionID {
+		return fmt.Errorf("retained Run Record identity does not match the shared Host Lock")
+	}
+	return nil
+}
+
+func reportHostAgentKeptSession(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, outcome runOutcome, runtime runRuntime, repoDir string, privateRoots []string) (hostAgentKeptResponse, error) {
+	result := runCommandJSONForOutcome(outcome)
+	sanitizeHostAgentTerminal(&result, privateRoots)
+	progress, err := buildHostAgentProgress(repoDir, assignment, options)
+	if err != nil {
+		return hostAgentKeptResponse{}, err
+	}
+	request := hostAgentKeptRequest{
+		Version: hostAgentAPIVersion, RunID: assignment.RunID, LockToken: assignment.LockToken,
+		SessionID: options.SessionID, Outcome: result, Progress: progress,
+	}
+	var response hostAgentKeptResponse
+	path := "/v1/host-agents/" + options.AgentID + "/assignments/" + assignment.RunID + "/kept"
+	err = postControlPlaneJSON(options.ControlPlane, options.CredentialEnv, path, request, runtime, http.StatusOK, &response)
+	if err != nil {
+		return hostAgentKeptResponse{}, err
+	}
+	if response.Version != hostAgentAPIVersion || response.Kind != "host-agent-kept-action" || response.RunID != assignment.RunID {
+		return hostAgentKeptResponse{}, fmt.Errorf("Control Plane returned an unsupported Kept Session response") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	return response, nil
+}
+
+func pollHostAgentKeptAction(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, runtime runRuntime) (hostAgentKeptResponse, error) {
+	request := hostAgentLockRequest{
+		Version: hostAgentAPIVersion, RunID: assignment.RunID, LockToken: assignment.LockToken, SessionID: options.SessionID,
+	}
+	var response hostAgentKeptResponse
+	path := "/v1/host-agents/" + options.AgentID + "/assignments/" + assignment.RunID + "/action"
+	err := postControlPlaneJSON(options.ControlPlane, options.CredentialEnv, path, request, runtime, http.StatusOK, &response)
+	if err != nil {
+		return hostAgentKeptResponse{}, err
+	}
+	if response.Version != hostAgentAPIVersion || response.Kind != "host-agent-kept-action" || response.RunID != assignment.RunID {
+		return hostAgentKeptResponse{}, fmt.Errorf("Control Plane returned an unsupported Kept Session action") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	}
+	return response, nil
+}
+
+func startHostAgentProgress(options hostAgentRunOnceOptions, assignment hostAgentAssignmentResponse, repoDir string, runtime runRuntime, executionCancel chan<- error) func() error {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	errorsOut := make(chan error, 1)
@@ -2934,6 +4138,12 @@ func startHostAgentProgress(options hostAgentRunOnceOptions, assignment hostAgen
 				if err != nil {
 					var statusErr *controlPlaneHTTPStatusError
 					if errors.As(err, &statusErr) && statusErr.StatusCode >= 400 && statusErr.StatusCode < 500 {
+						if isHostLockDeadlineError(err) {
+							select {
+							case executionCancel <- fmt.Errorf("Windows Host Agent progress deadline: %w", err): //nolint:staticcheck // Product term starts the user-facing diagnostic.
+							default:
+							}
+						}
 						errorsOut <- err
 						return
 					}
@@ -3103,7 +4313,7 @@ func hostAgentProgressLedgerPolicy(repoDir string) runLedgerPolicy {
 	return policy
 }
 
-func startHostAgentHeartbeat(options hostAgentRunOnceOptions, runtime runRuntime) (func(), <-chan error, <-chan error) {
+func startHostAgentHeartbeat(options hostAgentRunOnceOptions, runtime runRuntime) (func(), <-chan error, chan error) {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	heartbeatErrors := make(chan error, 1)
@@ -3116,9 +4326,13 @@ func startHostAgentHeartbeat(options hostAgentRunOnceOptions, runtime runRuntime
 		defer close(stopped)
 		ticker := time.NewTicker(hostAgentHeartbeatInterval)
 		defer ticker.Stop()
+		heartbeat := ticker.C
+		if heartbeatRuntime.HostAgentHeartbeat != nil {
+			heartbeat = heartbeatRuntime.HostAgentHeartbeat
+		}
 		for {
 			select {
-			case <-ticker.C:
+			case <-heartbeat:
 				var status hostAgentStatusResponse
 				capabilities, err := hostAgentCapabilityRecord(options, heartbeatRuntime.Now())
 				if err == nil {
@@ -3126,10 +4340,22 @@ func startHostAgentHeartbeat(options hostAgentRunOnceOptions, runtime runRuntime
 						Version: hostAgentAPIVersion, SessionID: options.SessionID, Capabilities: capabilities,
 					}, heartbeatRuntime, http.StatusOK, &status)
 				}
+				if err == nil && status.State == "cleaning" {
+					select {
+					case executionCancel <- errors.New("Host Lock deadline expired"): //nolint:staticcheck // Product term starts the user-facing diagnostic.
+					default:
+					}
+					// The accepted heartbeat just renewed one full cleanup lease.
+					// Stop renewing so a wedged cleaner becomes replaceable.
+					return
+				}
 				if err != nil {
 					heartbeatErr := fmt.Errorf("Windows Host Agent process-session heartbeat: %w", err) //nolint:staticcheck // Product term starts the user-facing diagnostic.
 					heartbeatErrors <- heartbeatErr
-					executionCancel <- heartbeatErr
+					select {
+					case executionCancel <- heartbeatErr:
+					default:
+					}
 					return
 				}
 			case <-done:
@@ -3154,6 +4380,10 @@ func currentHostAgentHeartbeatError(heartbeatErrors <-chan error) error {
 	default:
 		return nil
 	}
+}
+
+func isHostLockDeadlineError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Host Lock deadline expired")
 }
 
 func postHostAgentCompletion(options hostAgentRunOnceOptions, path string, completion hostAgentCompletionRequest, runtime runRuntime, terminal *runCommandJSON) error {
@@ -3241,6 +4471,9 @@ func validateHostAgentAssignment(options hostAgentRunOnceOptions, assignment hos
 	if assignment.Version != hostAgentAPIVersion || assignment.Kind != "host-agent-assignment" || assignment.AgentID != options.AgentID || assignment.HostID != options.HostID || validateRunID(assignment.RunID) != nil || assignment.LockToken == "" {
 		return fmt.Errorf("Control Plane returned an unsupported Windows Host Agent assignment") //nolint:staticcheck // Product terms start the user-facing diagnostic.
 	}
+	if assignment.Action != "" && assignment.Action != "execute" && assignment.Action != "wait" && assignment.Action != "cleanup" && assignment.Action != "finish" {
+		return fmt.Errorf("Control Plane returned an unsupported Windows Host Agent action") //nolint:staticcheck // Product terms start the user-facing diagnostic.
+	}
 	if assignment.Capabilities.Version != 0 {
 		var config repoRunConfig
 		if err := decodeKnownYAMLFields(assignment.Submission.Config, &config); err != nil || config.Version != 1 {
@@ -3263,16 +4496,24 @@ func failConfirmedHostAgentAssignment(options hostAgentRunOnceOptions, assignmen
 		Version: hostAgentAPIVersion, RunID: assignment.RunID, LockToken: assignment.LockToken,
 		SessionID: options.SessionID, Diagnostic: "Windows Host Agent failed while " + phase,
 	}
-	runRoot := filepath.Join(options.WorkRoot, "runs", assignment.RunID)
-	if cleanupErr := os.RemoveAll(runRoot); cleanupErr != nil {
-		return errors.Join(runErr, fmt.Errorf("clean failed Windows Host Agent workspace: %w", cleanupErr))
-	}
-	if _, cleanupErr := os.Lstat(runRoot); !errors.Is(cleanupErr, os.ErrNotExist) {
-		return errors.Join(runErr, fmt.Errorf("verify failed Windows Host Agent workspace cleanup: %w", cleanupErr))
+	copy := failure
+	if err := persistHostAgentMutationOutbox(options, assignment, hostAgentMutationOutbox{
+		Kind: "fail", Failure: &copy,
+	}); err != nil {
+		return errors.Join(runErr, err)
 	}
 	path := "/v1/host-agents/" + options.AgentID + "/assignments/" + assignment.RunID + "/fail"
 	var terminal runCommandJSON
 	failErr := postHostAgentMutation(options, path, failure, runtime, &terminal)
+	if failErr == nil {
+		failErr = cleanHostAgentRunRoot(options.WorkRoot, assignment.RunID)
+	}
+	if failErr == nil {
+		failErr = postHostAgentMutation(options, path, failure, runtime, &terminal)
+	}
+	if failErr == nil {
+		failErr = removeHostAgentMutationOutbox(options.WorkRoot, assignment.RunID)
+	}
 	return errors.Join(runErr, failErr)
 }
 

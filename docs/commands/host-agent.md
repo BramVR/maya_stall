@@ -61,6 +61,8 @@ This command advertises exactly one slot. It confirms the unique Host Lock token
 and its leased process-session fence before execution, renews that fence while
 working, and binds the shared Host Lock to the exact Session Broker adapter and
 Maya UI Session identity immediately after launch and before payload staging.
+Agent heartbeats and active Run Ledger checkpoints also refresh the Host Lock's
+durable idle deadline. Neither can extend its hard lifetime.
 When scheduling resolves the reported Session Broker Maya build, the Agent
 first binds the launched session durably, then queries it and fails closed on a
 different runtime version before payload staging or Scenario execution.
@@ -91,12 +93,25 @@ after the process exits. This fake-first slice intentionally provides no
 automated quarantine recovery command; the fail-closed state requires operator
 inspection outside Maya Stall before the Control Plane data is replaced.
 
-The fake Agent path accepts only cleanup-guaranteed `--stop-after always`
-submissions. After its one completion or reported failure, the Agent becomes
-offline and the command exits; another run requires a new `run-once` process.
-If a process disappears, a replacement can take over its durable assignment
-after the prior session lease expires only before execution confirmation. Loss
-after confirmation quarantines the assignment because shutdown is unverified.
+Retaining Stop Policies leave the command waiting on the durable assignment
+after Scenario completion. The Control Plane records the exact retained Broker
+session and keep deadline. On explicit stop or deadline expiry, the Agent
+verifies its private Run Manifest and Run Record against that shared identity,
+asks the Session Broker to stop only the matching Maya UI Session, cleans
+run-owned state, uploads terminal state and deadline events, and exits. A
+replacement `run-once` process may resume this cleanup from the private
+`--work-root` after process loss.
+
+The Agent journals its final completion or failure into a private
+`completion-outbox` before removing the per-run workspace. It clears that entry
+only after the Control Plane acknowledges the terminal mutation, allowing a
+replacement process-session to retry without rerunning the Scenario.
+
+After its one completion or reported failure, the Agent becomes offline and
+the command exits; another run requires a new `run-once` process. If a process
+disappears, its Host Lock remains reserved until the durable idle deadline.
+After that deadline a replacement receives cleanup work. A changed Broker
+session fails closed and remains quarantined instead of being stopped.
 
 The Agent can execute one real Maya Scenario through its configured Session
 Broker. It is still a one-assignment command, not a reconnecting background

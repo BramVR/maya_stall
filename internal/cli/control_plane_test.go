@@ -1484,7 +1484,7 @@ func TestControlPlaneServeCommandBuildsAuthenticatedTLSServer(t *testing.T) {
 	called := false
 	runtime.ControlPlaneServe = func(options controlPlaneServeOptions, handler http.Handler) error {
 		called = true
-		if options.Listen != "127.0.0.1:9443" || options.DataDir != dataDir || options.TLSCert != certPath || options.TLSKey != keyPath || handler == nil {
+		if options.Listen != "127.0.0.1:9443" || options.DataDir != dataDir || options.TLSCert != certPath || options.TLSKey != keyPath || options.HostLockIdle != 20*time.Minute || options.HostLockLifetime != 4*time.Hour || handler == nil {
 			t.Fatalf("Control Plane serve options = %+v handler nil = %t", options, handler == nil)
 		}
 		return nil
@@ -1492,10 +1492,23 @@ func TestControlPlaneServeCommandBuildsAuthenticatedTLSServer(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := RunWithRuntime([]string{"control-plane", "serve", "--listen", "127.0.0.1:9443", "--data-dir", dataDir, "--tls-cert", certPath, "--tls-key", keyPath}, &stdout, &stderr, workDir, "test-version", runtime)
+	code := RunWithRuntime([]string{
+		"control-plane", "serve", "--listen", "127.0.0.1:9443", "--data-dir", dataDir,
+		"--tls-cert", certPath, "--tls-key", keyPath,
+		"--host-lock-idle-timeout", "20m", "--host-lock-hard-lifetime", "4h",
+	}, &stdout, &stderr, workDir, "test-version", runtime)
 
 	if code != 0 || !called || !strings.Contains(stdout.String(), "controlPlane: https://127.0.0.1:9443") {
 		t.Fatalf("serve command = code %d called %t stdout %q stderr %q", code, called, stdout.String(), stderr.String())
+	}
+}
+
+func TestControlPlaneRejectsIdleTimeoutBelowAgentHeartbeatSafetyMargin(t *testing.T) {
+	_, err := parseControlPlaneServeArgs([]string{
+		"--data-dir", "control-plane-data", "--host-lock-idle-timeout", (minimumHostLockIdleTimeout - time.Second).String(),
+	}, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "at least 30s") {
+		t.Fatalf("short Host Lock idle timeout error = %v", err)
 	}
 }
 

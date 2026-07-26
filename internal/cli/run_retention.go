@@ -53,13 +53,14 @@ type runRetentionRecord struct {
 	RemoteSession         retainedSessionRecord `json:"remoteSession"`
 	KeepTTL               string                `json:"keepTTL,omitempty"`
 	KeepDeadline          string                `json:"keepDeadline,omitempty"`
+	HardDeadline          string                `json:"hardDeadline,omitempty"`
 	CreatedAt             string                `json:"createdAt"`
 	UpdatedAt             string                `json:"updatedAt"`
 	LegacyMissingRecord   bool                  `json:"-"`
 }
 
-func newRunRetentionRecord(context runContext, manifest runManifest, host mayaHostConfig, status string, reason string) runRetentionRecord {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+func newRunRetentionRecord(context runContext, manifest runManifest, host mayaHostConfig, status string, reason string, hardDeadline string, now time.Time) runRetentionRecord {
+	timestamp := now.UTC().Format(time.RFC3339Nano)
 	record := runRetentionRecord{
 		RunID:                 manifest.RunID,
 		Scenario:              manifest.Scenario,
@@ -76,18 +77,22 @@ func newRunRetentionRecord(context runContext, manifest runManifest, host mayaHo
 		RemoteWorkspace:       context.RunWorkspace.RemoteWorkspace(),
 		HostConfig:            host,
 		HostLockAuthoritative: hasAuthoritativeHostSideLock(host),
-		CreatedAt:             now,
-		UpdatedAt:             now,
+		CreatedAt:             timestamp,
+		UpdatedAt:             timestamp,
+		HardDeadline:          hardDeadline,
 	}
 	if isKeptRetentionStatus(status) {
-		stampKeptSessionDeadline(&record, time.Now(), defaultKeepTTL)
+		stampKeptSessionDeadline(&record, now, defaultKeepTTL)
 	}
 	return record
 }
 
 func writeRunRetentionRecord(context runContext, record runRetentionRecord) error {
-	if isKeptRetentionStatus(record.Status) && record.KeepDeadline == "" {
-		stampKeptSessionDeadline(&record, time.Now(), keepTTLFromRecord(record, defaultKeepTTL))
+	if isKeptRetentionStatus(record.Status) {
+		stampKeptSessionHardDeadline(&record, time.Now())
+		if record.KeepDeadline == "" {
+			stampKeptSessionDeadline(&record, time.Now(), keepTTLFromRecord(record, defaultKeepTTL))
+		}
 	}
 	record.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	content, err := json.MarshalIndent(record, "", "  ")
@@ -105,8 +110,19 @@ func stampKeptSessionDeadline(record *runRetentionRecord, now time.Time, keepTTL
 	if keepTTL <= 0 {
 		keepTTL = defaultKeepTTL
 	}
+	stampKeptSessionHardDeadline(record, now)
+	keep := now.UTC().Add(keepTTL)
+	if hard, err := time.Parse(time.RFC3339Nano, record.HardDeadline); err == nil && keep.After(hard) {
+		keep = hard
+	}
 	record.KeepTTL = keepTTL.String()
-	record.KeepDeadline = now.UTC().Add(keepTTL).Format(time.RFC3339Nano)
+	record.KeepDeadline = keep.Format(time.RFC3339Nano)
+}
+
+func stampKeptSessionHardDeadline(record *runRetentionRecord, now time.Time) {
+	if record.HardDeadline == "" {
+		record.HardDeadline = now.UTC().Add(defaultHostLockHardLifetime).Format(time.RFC3339Nano)
+	}
 }
 
 func keepTTLFromRecord(record runRetentionRecord, fallback time.Duration) time.Duration {

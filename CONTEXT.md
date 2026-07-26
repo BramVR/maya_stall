@@ -61,8 +61,12 @@ The Autodesk Maya version a Scenario needs in order to run correctly.
 _Avoid_: Host capability when referring specifically to Maya version compatibility
 
 **Host Lock**:
-A shared claim with a unique lock token that prevents more than one active or kept Maya UI run from using the same Maya Host at the same time.
+A durable shared claim with a unique lock token, last heartbeat, idle deadline, and hard deadline that prevents more than one active or kept Maya UI run from using the same Maya Host at the same time.
 _Avoid_: Repo-local lock, session lock when the machine-level run claim is meant
+
+**Host Lock Heartbeat**:
+A token-fenced sign of life from active Run progress or its Windows Host Agent that advances the Host Lock idle deadline without changing its hard lifetime.
+_Avoid_: Agent process-session lease when the Maya Host reservation deadline is meant
 
 **Host Health**:
 The readiness of a Maya Host to accept a run, checked in layers such as SSH, workspace access, Session Broker, Maya UI, Visual Evidence, and Scenario inputs.
@@ -97,7 +101,7 @@ A read-only connection to an active or kept run's events and logs.
 _Avoid_: Debug Attach, UI viewer
 
 **Kept Session**:
-A Maya UI Session intentionally left open after a run for debugging.
+A Maya UI Session intentionally left open after a run for debugging until its durable keep deadline, explicit authorized stop, or Host Lock deadline.
 _Avoid_: Leaked session, active run
 
 **Stop Policy**:

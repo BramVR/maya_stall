@@ -66,6 +66,14 @@ type controlPlaneStatusResponse struct {
 	Requirements  *scenarioRequirements `json:"requiredCapabilities,omitempty"`
 	KeepDeadline  string                `json:"keepDeadline,omitempty"`
 	KeepRemaining string                `json:"keepRemaining,omitempty"`
+	IdleDeadline  string                `json:"idleDeadline,omitempty"`
+	HardDeadline  string                `json:"hardDeadline,omitempty"`
+	ExpiryReason  string                `json:"expiryReason,omitempty"`
+}
+
+type controlPlaneKeepExtensionRequest struct {
+	Version int    `json:"version"`
+	By      string `json:"by"`
 }
 
 type controlPlaneEventsResponse struct {
@@ -132,19 +140,24 @@ type runReadOptions struct {
 }
 
 type controlPlaneServeOptions struct {
-	Listen   string
-	DataDir  string
-	TLSCert  string
-	TLSKey   string
-	TokenEnv string
+	Listen           string
+	DataDir          string
+	TLSCert          string
+	TLSKey           string
+	TokenEnv         string
+	HostLockIdle     time.Duration
+	HostLockLifetime time.Duration
 }
 
 func parseControlPlaneServeArgs(args []string, workDir string) (controlPlaneServeOptions, error) {
-	options := controlPlaneServeOptions{Listen: "127.0.0.1:8443", TokenEnv: defaultControlPlaneTokenEnv}
+	options := controlPlaneServeOptions{
+		Listen: "127.0.0.1:8443", TokenEnv: defaultControlPlaneTokenEnv,
+		HostLockIdle: defaultHostLockIdleTimeout, HostLockLifetime: defaultHostLockHardLifetime,
+	}
 	for index := 0; index < len(args); index++ {
 		flag := args[index]
 		switch flag {
-		case "--listen", "--data-dir", "--tls-cert", "--tls-key", "--token-env":
+		case "--listen", "--data-dir", "--tls-cert", "--tls-key", "--token-env", "--host-lock-idle-timeout", "--host-lock-hard-lifetime":
 			index++
 			if index >= len(args) || args[index] == "" || strings.HasPrefix(args[index], "--") {
 				return controlPlaneServeOptions{}, newUsageError("%s needs a value", flag)
@@ -160,6 +173,18 @@ func parseControlPlaneServeArgs(args []string, workDir string) (controlPlaneServ
 				options.TLSKey = resolveFromRepo(workDir, args[index])
 			case "--token-env":
 				options.TokenEnv = args[index]
+			case "--host-lock-idle-timeout":
+				duration, parseErr := time.ParseDuration(args[index])
+				if parseErr != nil || duration < minimumHostLockIdleTimeout {
+					return controlPlaneServeOptions{}, newUsageError("--host-lock-idle-timeout needs a duration of at least %s", minimumHostLockIdleTimeout)
+				}
+				options.HostLockIdle = duration
+			case "--host-lock-hard-lifetime":
+				duration, parseErr := time.ParseDuration(args[index])
+				if parseErr != nil || duration <= 0 {
+					return controlPlaneServeOptions{}, newUsageError("--host-lock-hard-lifetime needs a positive duration")
+				}
+				options.HostLockLifetime = duration
 			}
 		default:
 			return controlPlaneServeOptions{}, newUsageError("unknown control-plane serve option %q", flag)
@@ -170,6 +195,9 @@ func parseControlPlaneServeArgs(args []string, workDir string) (controlPlaneServ
 	}
 	if options.TLSCert == "" || options.TLSKey == "" {
 		return controlPlaneServeOptions{}, newUsageError("control-plane serve needs --tls-cert and --tls-key")
+	}
+	if options.HostLockLifetime <= options.HostLockIdle {
+		return controlPlaneServeOptions{}, newUsageError("--host-lock-hard-lifetime must exceed --host-lock-idle-timeout")
 	}
 	_, port, err := net.SplitHostPort(options.Listen)
 	if err != nil {
@@ -196,7 +224,9 @@ func runControlPlaneServer(options controlPlaneServeOptions, runtime runRuntime,
 			return fmt.Errorf("TLS path %s must be a regular file, not a symlink", path)
 		}
 	}
-	handler, err := newControlPlaneHandler(options.DataDir, token, runtime)
+	handler, err := newControlPlaneHandlerWithPolicy(options.DataDir, token, runtime, hostLockDeadlinePolicy{
+		IdleTimeout: options.HostLockIdle, HardLifetime: options.HostLockLifetime,
+	})
 	if err != nil {
 		return err
 	}
@@ -234,15 +264,23 @@ type controlPlaneHandler struct {
 	queueDispatchCycles   uint64
 	queueAcquireHostLock  func(string, string) (func() error, bool, error)
 	removeRejectedRunRoot func(string) error
+	hostLockPolicy        hostLockDeadlinePolicy
 	runIDs                []string
 }
 
 func newControlPlaneHandler(dataDir string, token string, runtime runRuntime) (http.Handler, error) {
+	return newControlPlaneHandlerWithPolicy(dataDir, token, runtime, defaultHostLockDeadlinePolicy())
+}
+
+func newControlPlaneHandlerWithPolicy(dataDir string, token string, runtime runRuntime, hostLockPolicy hostLockDeadlinePolicy) (http.Handler, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("control plane token must not be empty")
 	}
 	if dataDir == "" {
 		return nil, fmt.Errorf("control plane data directory must not be empty")
+	}
+	if hostLockPolicy.IdleTimeout <= 0 || hostLockPolicy.HardLifetime <= hostLockPolicy.IdleTimeout {
+		return nil, fmt.Errorf("Host Lock deadline policy needs a positive idle timeout and a longer hard lifetime") //nolint:staticcheck // Product term starts the user-facing diagnostic.
 	}
 	var err error
 	dataDir, err = filepath.Abs(dataDir)
@@ -273,7 +311,7 @@ func newControlPlaneHandler(dataDir string, token string, runtime runRuntime) (h
 	handler := &controlPlaneHandler{
 		dataDir: dataDir, token: token, runtime: runtime,
 		hostAgents: make(map[string]*controlPlaneHostAgent), assignments: make(map[string]*controlPlaneHostAgentAssignment), queuedRuns: make(map[string]*controlPlaneQueuedRun),
-		queueAcquireHostLock: acquireHostLock, removeRejectedRunRoot: os.RemoveAll, runIDs: runIDs,
+		queueAcquireHostLock: acquireHostLock, removeRejectedRunRoot: os.RemoveAll, hostLockPolicy: hostLockPolicy, runIDs: runIDs,
 	}
 	if err := handler.loadHostAgentState(); err != nil {
 		return nil, err
@@ -338,6 +376,10 @@ func ensurePrivateControlPlaneDirectory(path string) error {
 }
 
 func (handler *controlPlaneHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if err := handler.observeHostLockDeadlines(); err != nil {
+		writeControlPlaneError(response, http.StatusInternalServerError, "persist Host Lock expiry")
+		return
+	}
 	if handler.serveHostAgentAPI(response, request) {
 		return
 	}
@@ -348,6 +390,9 @@ func (handler *controlPlaneHandler) ServeHTTP(response http.ResponseWriter, requ
 	}
 	if request.URL.Path == "/v1/runs" && request.Method == http.MethodGet {
 		handler.serveRunHistory(response, request)
+		return
+	}
+	if handler.serveKeptSessionExtension(response, request) {
 		return
 	}
 	if handler.serveQueuedRunCancel(response, request) {
@@ -385,8 +430,13 @@ func (handler *controlPlaneHandler) ServeHTTP(response http.ResponseWriter, requ
 		writeControlPlaneError(response, http.StatusBadRequest, "invalid Stop Policy")
 		return
 	}
-	if _, err := parseKeepTTL(submission.KeepTTL); err != nil {
+	keepTTL, err := parseKeepTTL(submission.KeepTTL)
+	if err != nil {
 		writeControlPlaneError(response, http.StatusBadRequest, "invalid kept-session TTL")
+		return
+	}
+	if submission.StopAfter != stopAfterAlways && keepTTL > handler.hostLockPolicy.HardLifetime {
+		writeControlPlaneError(response, http.StatusBadRequest, "kept-session TTL exceeds Host Lock hard lifetime")
 		return
 	}
 	if err := validateControlPlaneSubmissionFiles(submission); err != nil {
@@ -487,6 +537,89 @@ func (handler *controlPlaneHandler) ServeHTTP(response http.ResponseWriter, requ
 	}
 	result := controlPlaneTerminalResponse(outcome, runErr, repoDir)
 	_ = json.NewEncoder(response).Encode(result)
+}
+
+func (handler *controlPlaneHandler) serveKeptSessionExtension(response http.ResponseWriter, request *http.Request) bool {
+	parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+	if request.Method != http.MethodPost || len(parts) != 4 || parts[0] != "v1" || parts[1] != "runs" || parts[3] != "extend" {
+		return false
+	}
+	if !handler.authorizedOperator(request) {
+		writeControlPlaneError(response, http.StatusUnauthorized, "authentication required")
+		return true
+	}
+	runID := parts[2]
+	if validateRunID(runID) != nil {
+		writeControlPlaneError(response, http.StatusBadRequest, "invalid Run ID")
+		return true
+	}
+	var extension controlPlaneKeepExtensionRequest
+	if err := decodeBoundedControlPlaneJSON(request.Body, 1024, &extension); err != nil || extension.Version != controlPlaneAPIVersion {
+		writeControlPlaneError(response, http.StatusBadRequest, "invalid Kept Session extension")
+		return true
+	}
+	by, err := time.ParseDuration(extension.By)
+	if err != nil || by <= 0 {
+		writeControlPlaneError(response, http.StatusBadRequest, "invalid Kept Session extension")
+		return true
+	}
+	result, err := handler.extendControlPlaneKeptSession(runID, by)
+	if err != nil {
+		if errors.Is(err, errControlPlaneRunNotKept) || errors.Is(err, errControlPlaneHostLockExpired) || errors.Is(err, errControlPlaneExtensionRejected) {
+			writeControlPlaneError(response, http.StatusConflict, err.Error())
+		} else {
+			writeControlPlaneError(response, http.StatusInternalServerError, "persist Kept Session extension")
+		}
+		return true
+	}
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(result)
+	return true
+}
+
+var (
+	errControlPlaneRunNotKept        = errors.New("run is not a Kept Session")
+	errControlPlaneHostLockExpired   = errors.New("Host Lock deadline expired")      //nolint:staticcheck // Product term starts the user-facing diagnostic.
+	errControlPlaneExtensionRejected = errors.New("Kept Session extension rejected") //nolint:staticcheck // Product term starts the user-facing diagnostic.
+)
+
+func (handler *controlPlaneHandler) extendControlPlaneKeptSession(runID string, by time.Duration) (controlPlaneStatusResponse, error) {
+	handler.mu.Lock()
+	assignment := handler.assignments[runID]
+	if assignment == nil {
+		handler.mu.Unlock()
+		return controlPlaneStatusResponse{}, errControlPlaneRunNotKept
+	}
+	handler.mu.Unlock()
+	assignment.checkpointMu.Lock()
+	defer assignment.checkpointMu.Unlock()
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	assignment = handler.assignments[runID]
+	if assignment == nil || assignment.record.State != "kept" {
+		return controlPlaneStatusResponse{}, errControlPlaneRunNotKept
+	}
+	now := handler.runtime.Now()
+	if assignment.record.expiryReason(now) != "" {
+		return controlPlaneStatusResponse{}, errControlPlaneHostLockExpired
+	}
+	previous := assignment.record
+	if err := assignment.record.extendKept(now, by, handler.hostLockPolicy); err != nil {
+		assignment.record = previous
+		return controlPlaneStatusResponse{}, errors.Join(errControlPlaneExtensionRejected, err)
+	}
+	handler.appendHostLockEventLocked(assignment, "kept-session.extended", by.String())
+	if err := newHostAgentTransitionStore(handler.dataDir).Commit(assignment.record, handler.prepareRecoveredHostAgentTransition); err != nil {
+		assignment.record = previous
+		return controlPlaneStatusResponse{}, err
+	}
+	record := *assignment.record.AssignedLedger
+	result := controlPlaneStatusFromRecord(assignment.repoDir, record, "/v1/runs/"+runID+"/evidence")
+	result.KeepDeadline = assignment.record.KeepDeadline
+	result.KeepRemaining = hostLockDeadlineRemaining(assignment.record.KeepDeadline, now)
+	result.IdleDeadline = assignment.record.IdleDeadline
+	result.HardDeadline = assignment.record.HardDeadline
+	return result, nil
 }
 
 func (handler *controlPlaneHandler) serveRunHistory(response http.ResponseWriter, request *http.Request) {
@@ -660,7 +793,8 @@ func (handler *controlPlaneHandler) serveRunRead(response http.ResponseWriter, r
 	switch parts[3] {
 	case "status":
 		result := controlPlaneStatusFromRecord(repoDir, record, "/v1/runs/"+runID+"/evidence")
-		addKeptSessionTTLToStatus(repoDir, runID, &result)
+		addKeptSessionTTLToStatus(repoDir, runID, handler.runtime.Now(), &result)
+		handler.addControlPlaneHostLockDeadlines(runID, &result)
 		handler.addControlPlaneQueueStatus(&result)
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(result)
@@ -1207,6 +1341,9 @@ func runScenarioThroughMode(repoDir string, options runOptions, runtime runRunti
 		if options.ControlPlaneTokenEnv != "" {
 			return runOutcome{}, newUsageError("--control-plane-token-env requires --control-plane")
 		}
+		if options.StopAfter != stopAfterAlways && options.KeepTTL > defaultHostLockHardLifetime {
+			return runOutcome{}, newUsageError("--keep-ttl exceeds embedded Kept Session retention limit %s", defaultHostLockHardLifetime)
+		}
 		return runScenario(repoDir, options, runtime)
 	}
 	return submitControlPlaneScenario(repoDir, options, runtime)
@@ -1311,10 +1448,16 @@ func printStatusThroughMode(repoDir string, options statusOptions, stdout io.Wri
 	if err == nil && result.KeepDeadline != "" {
 		_, err = fmt.Fprintf(stdout, "keepDeadline: %s\nkeepRemaining: %s\n", result.KeepDeadline, result.KeepRemaining)
 	}
+	if err == nil && result.IdleDeadline != "" {
+		_, err = fmt.Fprintf(stdout, "idleDeadline: %s\nhardDeadline: %s\n", result.IdleDeadline, result.HardDeadline)
+	}
+	if err == nil && result.ExpiryReason != "" {
+		_, err = fmt.Fprintf(stdout, "expiryReason: %s\n", result.ExpiryReason)
+	}
 	return err
 }
 
-func addKeptSessionTTLToStatus(repoDir string, runID string, result *controlPlaneStatusResponse) {
+func addKeptSessionTTLToStatus(repoDir string, runID string, now time.Time, result *controlPlaneStatusResponse) {
 	if result.State != "kept" && result.State != "cleanup-failed" {
 		return
 	}
@@ -1322,7 +1465,7 @@ func addKeptSessionTTLToStatus(repoDir string, runID string, result *controlPlan
 	if err != nil {
 		return
 	}
-	result.KeepDeadline, result.KeepRemaining = keptSessionTTLStatus(run.Record, time.Now())
+	result.KeepDeadline, result.KeepRemaining = keptSessionTTLStatus(run.Record, now)
 }
 
 func readEmbeddedStatusResponse(repoDir string, runID string) (controlPlaneStatusResponse, error) {
@@ -1369,6 +1512,26 @@ func readEmbeddedStatusResponse(repoDir string, runID string) (controlPlaneStatu
 		result.KeepDeadline, result.KeepRemaining = keptSessionTTLStatus(run.Record, time.Now())
 	}
 	return result, nil
+}
+
+func (handler *controlPlaneHandler) addControlPlaneHostLockDeadlines(runID string, result *controlPlaneStatusResponse) {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	assignment := handler.assignments[runID]
+	if assignment == nil {
+		return
+	}
+	result.IdleDeadline = assignment.record.IdleDeadline
+	result.HardDeadline = assignment.record.HardDeadline
+	if assignment.record.KeepDeadline != "" {
+		result.KeepDeadline = assignment.record.KeepDeadline
+		result.KeepRemaining = hostLockDeadlineRemaining(assignment.record.KeepDeadline, handler.runtime.Now())
+	}
+	result.ExpiryReason = assignment.record.ExpiryReason
+	if assignment.record.State == "expiring" || assignment.record.State == "finishing" {
+		result.State = assignment.record.State
+		result.CleanupState = "pending"
+	}
 }
 
 func parseRunReadArgs(command string, args []string) (runReadOptions, error) {

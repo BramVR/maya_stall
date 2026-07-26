@@ -50,6 +50,10 @@ Because `run-once` cannot retain an interactive session, this slice accepts only
 `stop-after always`. Retaining Stop Policies fail before assignment or Host Lock
 mutation.
 
+[ADR 0051](0051-enforce-shared-host-lock-deadlines.md) supersedes that
+retention limitation with durable kept-session ownership, deadline enforcement,
+and exact-session cleanup.
+
 This extends [ADR 0045](0045-complete-a-fake-control-plane-scenario.md). The
 no-enrollment in-process fake path remains compatible while consumers adopt the
 Agent boundary.

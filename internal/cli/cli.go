@@ -420,7 +420,8 @@ func RunWithRuntime(args []string, stdout io.Writer, stderr io.Writer, workDir s
 			fmt.Fprintf(stderr, "maya-stall stop: %v\n", err)
 			return 2
 		}
-		if err := stopRunThroughMode(workDir, options, runtime); err != nil {
+		stopResult, err := stopRunThroughMode(workDir, options, runtime)
+		if err != nil {
 			var userErr *usageError
 			if errors.As(err, &userErr) {
 				fmt.Fprintf(stderr, "maya-stall stop: %v\n", err)
@@ -429,7 +430,20 @@ func RunWithRuntime(args []string, stdout io.Writer, stderr io.Writer, workDir s
 			fmt.Fprintf(stderr, "maya-stall stop: %v\n", err)
 			return 1
 		}
-		_, _ = fmt.Fprintf(stdout, "stopped: %s\n", options.RunID)
+		_, _ = fmt.Fprintf(stdout, "%s: %s\n", stopResult, options.RunID)
+		return 0
+	case "extend":
+		options, err := parseExtendArgs(args[1:])
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "maya-stall extend: %v\n", err)
+			return 2
+		}
+		deadline, err := extendRunThroughMode(workDir, options, runtime)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "maya-stall extend: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(stdout, "extended: %s\nkeepDeadline: %s\n", options.RunID, deadline)
 		return 0
 	default:
 		fmt.Fprintf(stderr, "maya-stall: unknown command %q\n\n", args[0])
@@ -586,7 +600,7 @@ Usage:
   maya-stall events [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] [--from-sequence <number>] <run-id>
   maya-stall logs [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] <run-id>
   maya-stall result [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] <run-id>
-  maya-stall control-plane serve --data-dir <path> --tls-cert <path> --tls-key <path> [--listen <host:port>] [--token-env <name>]
+  maya-stall control-plane serve --data-dir <path> --tls-cert <path> --tls-key <path> [--listen <host:port>] [--token-env <name>] [--host-lock-idle-timeout <duration>] [--host-lock-hard-lifetime <duration>]
   maya-stall control-plane enroll-agent --control-plane <https-url> --agent-id <id> --host <id> --credential-env <name> [--token-env <name>]
   maya-stall host-agent run-once --control-plane <https-url> --agent-id <id> --host <id> --work-root <path> [--host-config <path>] --credential-env <name>
   maya-stall screenshot [--host-config <path>] [--target-profile <name>] [--host <id>]
@@ -600,6 +614,7 @@ Usage:
   maya-stall attach <run-id> screenshot
   maya-stall attach <run-id> control click --x <pixels> --y <pixels>
   maya-stall stop [--control-plane <https-url>] [--control-plane-token-env <name>] <run-id>
+  maya-stall extend [--control-plane <https-url>] [--control-plane-token-env <name>] --by <duration> <run-id>
 
 Commands:
   attach   observe a run or perform run-scoped screenshot/control
@@ -622,6 +637,7 @@ Commands:
   screenshot   capture a Session Broker screenshot artifact
   status   show current or durable run state
   stop     stop a kept run and release its Host Lock
+  extend   extend a Kept Session within its Host Lock policy
   version   print the maya-stall version
 `)
 }
@@ -640,6 +656,7 @@ type runOptions struct {
 	AssignedRunID        string
 	AssignedMayaBuild    string
 	AssignedEventPrefix  []byte
+	AssignedHardDeadline string
 	HostOptionsSet       bool
 	SharedFakeWorkRoot   string
 	KeptSessionRepoRoot  string

@@ -6,6 +6,7 @@ Release history starts with `v0.1.0`.
 
 ## Unreleased
 
+- Added durable Host Lock heartbeats with 30-minute idle and 6-hour hard deadlines, lost-Agent reclamation, policy-bounded `maya-stall extend`, exact-session Kept Session expiry cleanup, idempotent already-stopped handling, deadline events/status, and protected real Maya expiry proof: https://github.com/BramVR/gg_maya_stall/issues/122.
 - Added 90-minute default Kept Session deadlines, configurable with `run --keep-ttl`, opportunistic expiry through the retained Session Broker stop path during `run` and `doctor`, legacy grace stamping, expiry events and warnings, and remaining TTL in human and JSON status: https://github.com/BramVR/gg_maya_stall/issues/93.
 - Added deterministic two-Host parallel Scenario proof for distinct Host Locks, queued overflow, Run ID isolation, and failure independence, plus an opt-in real two-Host smoke required before production-ready parallel-execution claims: https://github.com/BramVR/gg_maya_stall/issues/121.
 - Added durable FIFO queueing for compatible Control Plane Runs when matching Maya Hosts are busy, dynamic queue position and wait metadata, restart-safe advancement, and queued cancellation without Host Lock or Maya Host mutation: https://github.com/BramVR/gg_maya_stall/issues/120.

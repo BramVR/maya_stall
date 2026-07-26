@@ -38,9 +38,9 @@ The submitting command remains attached for acceptance and terminal output when
 its connection stays open. Once accepted, however, the Control Plane owns the
 run independently of that connection. A later authenticated client can attach
 by Run ID and inclusive event sequence while an in-process fake or registered
-Windows Host Agent Scenario is running. Configured stop and run-scoped desktop
-mutations remain unavailable after assignment; `stop --control-plane` can
-cancel a Run while it is still queued.
+Windows Host Agent Scenario is running. Configured stop can cancel a queued Run
+or explicitly release a Kept Session. Active run-scoped desktop mutations
+remain unavailable after assignment.
 
 When registered Agents exist, the Control Plane matches the normalized Scenario
 requirements against fresh Agent capability reports before assignment, Host
@@ -97,6 +97,14 @@ execute, and settle flow:
    Evidence Bundle.
 13. Run Validators.
 14. Apply the Stop Policy to that Maya UI Session and release or retain the Host Lock.
+
+Configured Agent runs record active Run progress and Agent heartbeats against
+the durable Host Lock. Its idle deadline defaults to 30 minutes and its hard
+lifetime to 6 hours under server policy. If the submitting CLI or Agent
+disappears, later Control Plane or Agent contact enforces those deadlines and
+routes exact-session cleanup through a replacement Agent. Retaining Stop
+Policies add a keep deadline under the same hard cap; use
+[`extend`](extend.md) for an explicit extension.
 
 Supported runtime profiles:
 
@@ -233,6 +241,13 @@ Record has a 90-minute keep deadline by default. It remains locked until
 `maya-stall stop <run-id>` verifies ownership and stops it or a later `run` or
 `doctor` contact with that Maya Host expires it through the same broker path.
 
+Configured Control Plane Host Locks additionally persist a 30-minute idle
+deadline and 6-hour hard lifetime by default. Active progress and Agent
+heartbeats refresh only the idle deadline. Any Control Plane request enforces
+an elapsed deadline and directs the current or replacement Agent to
+exact-session cleanup. A configured Kept Session can be extended within the hard cap
+only through explicit authenticated `maya-stall extend --by <duration>`.
+
 An expired lease is recoverable only after the configured Session Broker proves
 that no Maya UI Session is active. Unreadable ownership, a live lease, or an
 unavailable/active broker fails closed. The repo-local lock remains as a mirror
@@ -261,7 +276,9 @@ remote session metadata needed by `status`, `attach`, and `stop`. The record als
 stores `keepTTL` and an RFC3339Nano UTC `keepDeadline`. The built-in TTL is 90
 minutes; `--keep-ttl <duration>` overrides it for that run. No Repo Run Config
 default exists because the current config has no Stop Policy/kept-session
-defaults section.
+defaults section. Embedded mode has a fixed 6-hour Kept Session retention limit
+and rejects a longer `--keep-ttl`; configured mode validates the requested TTL
+against the Control Plane's active Host Lock `--host-lock-hard-lifetime` policy.
 
 Kept sessions are visible through truth-seeking `status`, readable through
 read-only `attach`, and cleaned with broker-backed `stop`. `run` sweeps only

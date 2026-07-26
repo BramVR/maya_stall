@@ -46,13 +46,14 @@ maya-stall status [--json] [control-plane flags] --run <run-id>
 maya-stall events [--json] [control-plane flags] [--from-sequence <number>] <run-id>
 maya-stall logs [--json] [control-plane flags] <run-id>
 maya-stall result [--json] [control-plane flags] <run-id>
-maya-stall control-plane serve --data-dir <path> --tls-cert <path> --tls-key <path>
+maya-stall control-plane serve --data-dir <path> --tls-cert <path> --tls-key <path> [--host-lock-idle-timeout <duration>] [--host-lock-hard-lifetime <duration>]
 maya-stall control-plane enroll-agent --control-plane <url> --agent-id <id> --host <id> --credential-env <name>
 maya-stall host-agent run-once --control-plane <url> --agent-id <id> --host <id> --work-root <path> [--host-config <path>] --credential-env <name>
 maya-stall attach <run-id> [control-plane flags] [--from-sequence <number>]
 maya-stall attach <run-id> screenshot
 maya-stall attach <run-id> control click --x <pixels> --y <pixels>
 maya-stall stop [--control-plane <https-url>] [--control-plane-token-env <name>] <run-id>
+maya-stall extend [--control-plane <https-url>] [--control-plane-token-env <name>] --by <duration> <run-id>
 ```
 
 Control Plane flags:
@@ -96,7 +97,8 @@ See [run](commands/run.md), [history](commands/history.md),
 [status](commands/status.md), [events](commands/events.md),
 [logs](commands/logs.md), [result](commands/result.md),
 [control-plane](commands/control-plane.md), [host-agent](commands/host-agent.md),
-[attach](commands/attach.md), and [stop](commands/stop.md).
+[attach](commands/attach.md), [stop](commands/stop.md), and
+[extend](commands/extend.md).
 
 An identified Scenario submission receives a Run ID before validation, host
 selection, or remote checks. `--json` emits newline-delimited acceptance and
@@ -115,6 +117,11 @@ one registered outbound Windows Host Agent and a durable shared Host Lock. An
 Agent-local `--host-config` selects real Maya execution; omitting it selects the
 explicit fake development path. Without an enrollment the Control Plane retains
 the in-process fake path.
+
+Configured Host Locks default to a 30-minute idle timeout and 6-hour hard
+lifetime. Active Run progress and Agent heartbeats refresh the idle deadline.
+Kept Sessions remain under the same hard cap; `extend --by <duration>` is the
+explicit authenticated action for moving their keep deadline within policy.
 
 After acceptance, a configured run survives submitter disconnect. Configured
 `attach` follows from an inclusive durable sequence cursor; live and historical

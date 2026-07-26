@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -147,6 +148,7 @@ func TestLegacyKeptSessionGetsGraceThenExpiresOnLaterContact(t *testing.T) {
 	}
 	delete(record, "keepTTL")
 	delete(record, "keepDeadline")
+	delete(record, "hardDeadline")
 	if err := writeJSONFile(recordPath, record); err != nil {
 		t.Fatalf("write legacy kept Run Record: %v", err)
 	}
@@ -157,8 +159,8 @@ func TestLegacyKeptSessionGetsGraceThenExpiresOnLaterContact(t *testing.T) {
 		t.Fatalf("first doctor exit code = %d, want kept-host failure; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	stamped := readRunRetentionRecordFile(t, recordPath)
-	if stamped.KeepTTL != defaultKeepTTL.String() || stamped.KeepDeadline == "" {
-		t.Fatalf("legacy grace stamp = ttl %q deadline %q", stamped.KeepTTL, stamped.KeepDeadline)
+	if stamped.KeepTTL != defaultKeepTTL.String() || stamped.KeepDeadline == "" || stamped.HardDeadline == "" {
+		t.Fatalf("legacy grace stamp = ttl %q deadline %q hard deadline %q", stamped.KeepTTL, stamped.KeepDeadline, stamped.HardDeadline)
 	}
 	events, err := os.ReadFile(filepath.Join(stateDir, "events.jsonl"))
 	if err != nil {
@@ -166,6 +168,16 @@ func TestLegacyKeptSessionGetsGraceThenExpiresOnLaterContact(t *testing.T) {
 	}
 	if !strings.Contains(string(events), `"type":"kept-session-grace-stamped"`) {
 		t.Fatalf("grace-stamped event missing:\n%s", events)
+	}
+	contactAt, err := time.Parse(time.RFC3339Nano, stamped.KeepDeadline)
+	if err != nil {
+		t.Fatalf("parse grace deadline: %v", err)
+	}
+	contactAt = contactAt.Add(-defaultKeepTTL)
+	runtime := defaultRunRuntime()
+	runtime.Now = func() time.Time { return contactAt }
+	if _, err := extendRunThroughMode(dir, extendOptions{RunID: keptRunID, By: time.Minute}, runtime); err != nil {
+		t.Fatalf("extend grace-stamped legacy session: %v", err)
 	}
 
 	content, err = os.ReadFile(recordPath)
@@ -225,6 +237,134 @@ func TestLegacyGraceIgnoresSuccessorKeepTTL(t *testing.T) {
 	stamped := readRunRetentionRecordFile(t, recordPath)
 	if stamped.KeepTTL != defaultKeepTTL.String() || stamped.KeepDeadline != contactAt.Add(defaultKeepTTL).Format(time.RFC3339Nano) {
 		t.Fatalf("legacy grace inherited successor TTL: ttl=%q deadline=%q", stamped.KeepTTL, stamped.KeepDeadline)
+	}
+}
+
+func TestLegacyKeepDeadlineIsClampedToMigratedHardLifetime(t *testing.T) {
+	dir := writeRunConfigFixture(t)
+	keptAt := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	runtime := defaultRunRuntime()
+	runtime.Now = func() time.Time { return keptAt }
+	var stdout, stderr bytes.Buffer
+	if code := RunWithRuntime([]string{"run", "--stop-after", "never", "smoke"}, &stdout, &stderr, dir, "test-version", runtime); code != 0 {
+		t.Fatalf("kept run exit code = %d, want 0; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	runID := runIDFromOutput(t, stdout.String())
+	recordPath := filepath.Join(dir, ".maya-stall", "state", "runs", runID, "run-record.json")
+	record := readRunRetentionRecordFile(t, recordPath)
+	contactAt := keptAt.Add(time.Hour)
+	record.HardDeadline = ""
+	record.KeepDeadline = contactAt.Add(24 * time.Hour).Format(time.RFC3339Nano)
+	content, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal legacy Run Record: %v", err)
+	}
+	if err := writeRunLedgerBytes(recordPath, append(content, '\n')); err != nil {
+		t.Fatalf("write legacy Run Record: %v", err)
+	}
+
+	if warnings := sweepKeptSessions(dir, record.Host, contactAt); len(warnings) != 0 {
+		t.Fatalf("migrate legacy hard lifetime warnings = %v", warnings)
+	}
+	migrated := readRunRetentionRecordFile(t, recordPath)
+	wantHard := contactAt.Add(defaultHostLockHardLifetime).Format(time.RFC3339Nano)
+	if migrated.HardDeadline != wantHard || migrated.KeepDeadline != wantHard {
+		t.Fatalf("migrated deadlines = keep %q hard %q, want %q", migrated.KeepDeadline, migrated.HardDeadline, wantHard)
+	}
+}
+
+func TestEmbeddedKeepTTLRejectsHardLifetimeOverflow(t *testing.T) {
+	dir := writeRunConfigFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := RunWithRuntime([]string{"run", "--stop-after", "never", "--keep-ttl", "7h", "smoke"}, &stdout, &stderr, dir, "test-version", defaultRunRuntime())
+	if code != 2 || !strings.Contains(stderr.String(), "exceeds embedded Kept Session retention limit 6h0m0s") {
+		t.Fatalf("embedded over-cap keep TTL = code %d stdout %q stderr %q", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = RunWithRuntime([]string{"run", "--stop-after", "always", "--keep-ttl", "7h", "smoke"}, &stdout, &stderr, dir, "test-version", defaultRunRuntime())
+	if code != 0 {
+		t.Fatalf("cleanup-guaranteed embedded run rejected irrelevant keep TTL = code %d stdout %q stderr %q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRejectedLegacyExtensionStillPersistsFirstContactHardDeadline(t *testing.T) {
+	dir := writeRunConfigFixture(t)
+	start := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	runtime := defaultRunRuntime()
+	runtime.Now = func() time.Time { return start }
+	var stdout, stderr bytes.Buffer
+	if code := RunWithRuntime([]string{"run", "--stop-after", "never", "smoke"}, &stdout, &stderr, dir, "test-version", runtime); code != 0 {
+		t.Fatalf("kept run exit code = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	runID := runIDFromOutput(t, stdout.String())
+	recordPath := filepath.Join(dir, ".maya-stall", "state", "runs", runID, "run-record.json")
+	record := readRunRetentionRecordFile(t, recordPath)
+	contactAt := start.Add(time.Hour)
+	record.HardDeadline = ""
+	record.KeepDeadline = contactAt.Add(24 * time.Hour).Format(time.RFC3339Nano)
+	content, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal legacy Run Record: %v", err)
+	}
+	if err := writeRunLedgerBytes(recordPath, append(content, '\n')); err != nil {
+		t.Fatalf("write legacy Run Record: %v", err)
+	}
+	runtime.Now = func() time.Time { return contactAt }
+	if _, err := extendRunThroughMode(dir, extendOptions{RunID: runID, By: defaultHostLockHardLifetime}, runtime); err == nil {
+		t.Fatal("over-policy legacy extension succeeded")
+	}
+	first := readRunRetentionRecordFile(t, recordPath)
+	wantHard := contactAt.Add(defaultHostLockHardLifetime).Format(time.RFC3339Nano)
+	if first.HardDeadline != wantHard || first.KeepDeadline != wantHard {
+		t.Fatalf("first-contact deadlines = keep %q hard %q, want %q", first.KeepDeadline, first.HardDeadline, wantHard)
+	}
+	runtime.Now = func() time.Time { return contactAt.Add(time.Hour) }
+	if _, err := extendRunThroughMode(dir, extendOptions{RunID: runID, By: defaultHostLockHardLifetime}, runtime); err == nil {
+		t.Fatal("later over-policy legacy extension succeeded")
+	}
+	if later := readRunRetentionRecordFile(t, recordPath); later.HardDeadline != wantHard {
+		t.Fatalf("legacy hard deadline moved from %q to %q", wantHard, later.HardDeadline)
+	}
+}
+
+func TestConcurrentEmbeddedExtensionsAreSerialized(t *testing.T) {
+	dir := writeRunConfigFixture(t)
+	now := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	runtime := defaultRunRuntime()
+	runtime.Now = func() time.Time { return now }
+	var stdout, stderr bytes.Buffer
+	if code := RunWithRuntime([]string{"run", "--stop-after", "never", "smoke"}, &stdout, &stderr, dir, "test-version", runtime); code != 0 {
+		t.Fatalf("kept run exit code = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	runID := runIDFromOutput(t, stdout.String())
+	recordPath := filepath.Join(dir, ".maya-stall", "state", "runs", runID, "run-record.json")
+	before := readRunRetentionRecordFile(t, recordPath)
+	initial, err := time.Parse(time.RFC3339Nano, before.KeepDeadline)
+	if err != nil {
+		t.Fatalf("parse initial keep deadline: %v", err)
+	}
+	var group sync.WaitGroup
+	errorsByAttempt := make(chan error, 2)
+	for attempt := 0; attempt < 2; attempt++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, err := extendRunThroughMode(dir, extendOptions{RunID: runID, By: time.Minute}, runtime)
+			errorsByAttempt <- err
+		}()
+	}
+	group.Wait()
+	close(errorsByAttempt)
+	for err := range errorsByAttempt {
+		if err != nil {
+			t.Fatalf("concurrent extension: %v", err)
+		}
+	}
+	after := readRunRetentionRecordFile(t, recordPath)
+	if want := initial.Add(2 * time.Minute).Format(time.RFC3339Nano); after.KeepDeadline != want {
+		t.Fatalf("serialized keep deadline = %q, want %q", after.KeepDeadline, want)
 	}
 }
 

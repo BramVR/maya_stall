@@ -386,7 +386,7 @@ func (handler *controlPlaneHandler) queueAdmissionLocked(targetProfile string, r
 	now := handler.runtime.Now()
 	hostPools := make(map[string]bool)
 	for _, agent := range handler.hostAgents {
-		if agent == nil || agent.status.SessionID == "" || agent.status.Slots != 1 || !agent.status.SessionBinding || !now.Before(agent.sessionExpiresAt) {
+		if agent == nil || agent.status.SessionID == "" || agent.status.Slots != 1 || !agent.status.SessionBinding || !agent.status.DeadlineActions || !now.Before(agent.sessionExpiresAt) {
 			continue
 		}
 		switch agent.status.State {
@@ -440,17 +440,10 @@ func (handler *controlPlaneHandler) dispatchQueuedRuns() {
 	for _, queued := range handler.queuedRuns {
 		queued.lockContended = false
 	}
-	for _, agent := range handler.hostAgents {
-		if agent.status.State == "ready" && agent.status.SessionID != "" && !now.Before(agent.sessionExpiresAt) {
-			agent.status.State = "offline"
-			agent.status.SessionID = ""
-			agent.sessionExpiresAt = time.Time{}
-			_ = handler.persistHostAgentStatus(agent)
-		}
-	}
+	handler.expireReadyHostAgentSessionsLocked(now)
 	hosts := make([]*controlPlaneHostAgent, 0, len(handler.hostAgents))
 	for _, agent := range handler.hostAgents {
-		if agent != nil && agent.status.State == "ready" && agent.status.RunID == "" && agent.status.SessionID != "" && agent.status.Slots == 1 && agent.status.SessionBinding && now.Before(agent.sessionExpiresAt) {
+		if agent != nil && agent.status.State == "ready" && agent.status.RunID == "" && agent.status.SessionID != "" && agent.status.Slots == 1 && agent.status.SessionBinding && agent.status.DeadlineActions && now.Before(agent.sessionExpiresAt) {
 			hosts = append(hosts, agent)
 		}
 	}
@@ -467,7 +460,7 @@ func (handler *controlPlaneHandler) dispatchQueuedRuns() {
 	for _, host := range hosts {
 		handler.mu.Lock()
 		now = handler.runtime.Now()
-		if handler.hostAgents[host.status.AgentID] != host || host.status.State != "ready" || host.status.RunID != "" || host.status.SessionID == "" || host.status.Slots != 1 || !host.status.SessionBinding || !now.Before(host.sessionExpiresAt) {
+		if handler.hostAgents[host.status.AgentID] != host || host.status.State != "ready" || host.status.RunID != "" || host.status.SessionID == "" || host.status.Slots != 1 || !host.status.SessionBinding || !host.status.DeadlineActions || !now.Before(host.sessionExpiresAt) {
 			handler.mu.Unlock()
 			continue
 		}
@@ -568,6 +561,17 @@ func (handler *controlPlaneHandler) dispatchQueuedRuns() {
 	handler.mu.Unlock()
 }
 
+func (handler *controlPlaneHandler) expireReadyHostAgentSessionsLocked(now time.Time) {
+	for _, agent := range handler.hostAgents {
+		if agent.status.State == "ready" && agent.status.SessionID != "" && !now.Before(agent.sessionExpiresAt) {
+			agent.status.State = "offline"
+			agent.status.SessionID = ""
+			agent.sessionExpiresAt = time.Time{}
+			_ = handler.persistHostAgentStatus(agent)
+		}
+	}
+}
+
 func (handler *controlPlaneHandler) queueHasCompatibleBusyHostLocked(queued *controlPlaneQueuedRun, now time.Time) bool {
 	targetProfile := queueTargetProfile(queued.record)
 	for _, agent := range handler.hostAgents {
@@ -579,7 +583,7 @@ func (handler *controlPlaneHandler) queueHasCompatibleBusyHostLocked(queued *con
 		default:
 			continue
 		}
-		if agent.status.SessionID == "" || agent.status.Slots != 1 || !agent.status.SessionBinding || !now.Before(agent.sessionExpiresAt) || !containsExactString(agent.status.Capabilities.TargetProfiles, targetProfile) || agent.status.Capabilities.TargetProfileHostPools[targetProfile] != queued.record.HostPool {
+		if agent.status.SessionID == "" || agent.status.Slots != 1 || !agent.status.SessionBinding || !agent.status.DeadlineActions || !now.Before(agent.sessionExpiresAt) || !containsExactString(agent.status.Capabilities.TargetProfiles, targetProfile) || agent.status.Capabilities.TargetProfileHostPools[targetProfile] != queued.record.HostPool {
 			continue
 		}
 		if decideMayaHostCompatibility(queued.record.Requirements, agent.status.Capabilities, now).Compatible {
@@ -793,7 +797,7 @@ func (handler *controlPlaneHandler) queueWaitReasonLocked(queued *controlPlaneQu
 	targetProfile := queueTargetProfile(queued.record)
 	compatibleHostBusy := false
 	for _, agent := range handler.hostAgents {
-		if agent == nil || agent.status.State == "offline" || agent.status.State == "quarantined" || agent.status.SessionID == "" || agent.status.Slots != 1 || !agent.status.SessionBinding || !now.Before(agent.sessionExpiresAt) || !containsExactString(agent.status.Capabilities.TargetProfiles, targetProfile) || agent.status.Capabilities.TargetProfileHostPools[targetProfile] != queued.record.HostPool {
+		if agent == nil || agent.status.State == "offline" || agent.status.State == "quarantined" || agent.status.SessionID == "" || agent.status.Slots != 1 || !agent.status.SessionBinding || !agent.status.DeadlineActions || !now.Before(agent.sessionExpiresAt) || !containsExactString(agent.status.Capabilities.TargetProfiles, targetProfile) || agent.status.Capabilities.TargetProfileHostPools[targetProfile] != queued.record.HostPool {
 			continue
 		}
 		if decideMayaHostCompatibility(queued.record.Requirements, agent.status.Capabilities, now).Compatible {
@@ -937,6 +941,11 @@ func (handler *controlPlaneHandler) serveQueuedRunCancel(response http.ResponseW
 	}
 	status, err := handler.cancelQueuedRun(runID)
 	if err != nil {
+		if errors.Is(err, errQueuedRunNotFound) {
+			status, err = handler.requestKeptSessionStop(runID)
+		}
+	}
+	if err != nil {
 		if errors.Is(err, errQueuedRunDispatching) {
 			writeControlPlaneError(response, http.StatusConflict, "queued Run assignment has started")
 		} else if errors.Is(err, errQueuedRunCanceling) {
@@ -953,6 +962,51 @@ func (handler *controlPlaneHandler) serveQueuedRunCancel(response http.ResponseW
 	return true
 }
 
+func (handler *controlPlaneHandler) requestKeptSessionStop(runID string) (controlPlaneStatusResponse, error) {
+	handler.mu.Lock()
+	assignment := handler.assignments[runID]
+	if assignment == nil {
+		handler.mu.Unlock()
+		return controlPlaneStatusResponse{}, errQueuedRunNotFound
+	}
+	handler.mu.Unlock()
+	assignment.checkpointMu.Lock()
+	defer assignment.checkpointMu.Unlock()
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	assignment = handler.assignments[runID]
+	if assignment == nil || assignment.record.State != "kept" && (assignment.record.State != "expiring" || assignment.record.ExpiryFromState != "kept" || assignment.record.KeepDeadline == "") {
+		return controlPlaneStatusResponse{}, errQueuedRunNotFound
+	}
+	if assignment.record.State == "kept" {
+		previous := assignment.record
+		assignment.record.ExpiryFromState = assignment.record.State
+		assignment.record.State = "expiring"
+		handler.appendHostLockEventLocked(assignment, "kept-session.stop-requested", "authorized explicit stop")
+		if err := newHostAgentTransitionStore(handler.dataDir).Commit(assignment.record, handler.prepareRecoveredHostAgentTransition); err != nil {
+			assignment.record = previous
+			return controlPlaneStatusResponse{}, err
+		}
+	}
+	agent := handler.hostAgents[assignment.record.AgentID]
+	if agent != nil {
+		agent.status.State = "cleaning"
+		if err := handler.persistHostAgentStatus(agent); err != nil {
+			return controlPlaneStatusResponse{}, err
+		}
+		handler.signalHostAgent(agent)
+	}
+	record := *assignment.record.AssignedLedger
+	status := controlPlaneStatusFromRecord(assignment.repoDir, record, "/v1/runs/"+runID+"/evidence")
+	status.State = "expiring"
+	status.CleanupState = "pending"
+	status.KeepDeadline = assignment.record.KeepDeadline
+	status.KeepRemaining = hostLockDeadlineRemaining(assignment.record.KeepDeadline, handler.runtime.Now())
+	status.IdleDeadline = assignment.record.IdleDeadline
+	status.HardDeadline = assignment.record.HardDeadline
+	return status, nil
+}
+
 var (
 	errQueuedRunDispatching = errors.New("queued Run is dispatching")
 	errQueuedRunCanceling   = errors.New("queued Run cancellation is in progress")
@@ -961,6 +1015,7 @@ var (
 
 func (handler *controlPlaneHandler) cancelQueuedRun(runID string) (controlPlaneStatusResponse, error) {
 	handler.mu.Lock()
+	handler.expireReadyHostAgentSessionsLocked(handler.runtime.Now())
 	queued := handler.queuedRuns[runID]
 	if queued == nil {
 		handler.mu.Unlock()

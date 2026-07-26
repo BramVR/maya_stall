@@ -381,6 +381,9 @@ func TestLiveVisualEvidenceProofWorkflowRequiresSmokePass(t *testing.T) {
 	if !strings.Contains(string(sshSmoke), `t.Run("shared Host Agent path", runOptInRealSharedHostAgentRunSmoke)`) {
 		t.Fatal("protected live SSH smoke does not require the shared Host Agent path")
 	}
+	if !strings.Contains(string(sshSmoke), `t.Run("shared Kept Session deadline path", runOptInRealSharedKeptSessionDeadlineSmoke)`) {
+		t.Fatal("protected live SSH smoke does not require shared Kept Session deadline proof")
+	}
 }
 
 func TestRealSSHSmokeScreenshotAndControlArgs(t *testing.T) {
