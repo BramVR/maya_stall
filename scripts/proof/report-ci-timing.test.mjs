@@ -10,18 +10,18 @@ const script = path.join(root, "scripts", "proof", "report-ci-timing.mjs");
 
 test("timing report separates hosted feedback, trusted queue, and live execution", () => {
   const hosted = [
-    job("Go Tests", 0, 40), job("Lint", 0, 25), job("Documentation", 0, 15), job("Proof Policy And Helpers", 0, 30),
+    job("Go Tests", 0, 40), job("Go Tests (Windows)", 0, 55), job("Lint", 0, 25), job("Documentation", 0, 15), job("Proof Policy And Helpers", 0, 30),
   ];
   const trusted = [job("Classify Proof", 45, 55), job("Live Maya Proof", 70, 190)];
   const output = run(hosted, trusted);
-  assert.match(output, /hosted_feedback_seconds: 40/);
+  assert.match(output, /hosted_feedback_seconds: 55/);
   assert.match(output, /live_runner_queue_seconds: 15/);
   assert.match(output, /live_execution_seconds: 120/);
 });
 
 test("timing report treats a skipped live job as not scheduled", () => {
   const hosted = [
-    job("Go Tests", 0, 40), job("Lint", 0, 25), job("Documentation", 0, 15), job("Proof Policy And Helpers", 0, 30),
+    job("Go Tests", 0, 40), job("Go Tests (Windows)", 0, 55), job("Lint", 0, 25), job("Documentation", 0, 15), job("Proof Policy And Helpers", 0, 30),
   ];
   const trusted = [job("Classify Proof", 45, 55), { name: "Live Maya Proof", conclusion: "skipped" }];
   const output = run(hosted, trusted);

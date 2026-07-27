@@ -3,7 +3,7 @@
 # Maya Stall
 
 [![CI](https://github.com/BramVR/gg_maya_stall/actions/workflows/ci-required.yml/badge.svg)](https://github.com/BramVR/gg_maya_stall/actions/workflows/ci-required.yml)
-[![Go 1.22](https://img.shields.io/badge/go-1.22-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go 1.25](https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white)](go.mod)
 
 **Run real Autodesk Maya UI Scenarios from repo-owned config.**
 
