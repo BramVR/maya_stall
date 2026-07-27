@@ -41,7 +41,7 @@ test("trusted default-branch workflow verifies hosted results and current head",
   assert.match(required, /workflows: \[CI Hosted\]/);
   assert.doesNotMatch(required, /^  pull_request(?:_target)?:/m);
   assert.match(required, /run\.path !== "\.github\/workflows\/ci-hosted\.yml"/);
-  for (const name of ["Go Tests", "Lint", "Documentation", "Proof Policy And Helpers"]) assert.match(required, new RegExp(`"${name}"`));
+  for (const name of ["Go Tests", "Go Tests (Windows)", "Lint", "Documentation", "Proof Policy And Helpers"]) assert.ok(required.includes(`"${name}"`));
   assert.match(required, /run\.conclusion === "success"/);
   assert.match(required, /github\.rest\.pulls\.list/);
   assert.match(required, /matches\.length !== 1/);
