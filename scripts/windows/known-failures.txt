@@ -12,7 +12,7 @@
 # the gate reads this file from the candidate checkout, so a change could add a
 # name here and still go green. Treat any addition in a diff as a red flag.
 #
-# Measured on desktop-mtiofol, go1.25.0 windows/amd64: 161 failures of 627 tests (measured 162; TestRunScenarioRenewsHostSideLockAcrossLeaseBoundary passes on windows-latest).
+# Measured on a real Windows Maya Host, go1.25.0 windows/amd64: 161 failures of 627 tests (measured 162; TestRunScenarioRenewsHostSideLockAcrossLeaseBoundary passes on windows-latest).
 
 # --- perm (81) ---
 # control_plane.go rejects every Windows directory: Go synthesizes mode 0777 for
