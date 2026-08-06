@@ -4,7 +4,7 @@ const args = parseArgs(process.argv.slice(2));
 const hostedJobs = jobs(args.hosted_input);
 const trustedJobs = jobs(args.trusted_input);
 const runCreated = timestamp(args.hosted_run_created_at, "hosted run creation");
-const hostedNames = new Set(["Go Tests", "Lint", "Documentation", "Proof Policy And Helpers"]);
+const hostedNames = new Set(["Go Tests", "Go Tests (Windows)", "Lint", "Documentation", "Proof Policy And Helpers"]);
 const hosted = hostedJobs.filter((job) => hostedNames.has(job.name));
 if (hosted.length !== hostedNames.size) fail("timing input is missing one or more hosted jobs");
 const hostedComplete = Math.max(...hosted.map((job) => timestamp(job.completed_at, `${job.name} completion`)));
