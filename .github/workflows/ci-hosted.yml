@@ -25,6 +25,26 @@ jobs:
         with: {go-version-file: go.mod, cache: false}
       - run: go test -race ./...
 
+  go_tests_windows:
+    name: Go Tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: "${{ github.event.pull_request.head.sha || github.sha }}", persist-credentials: false}
+      - uses: actions/setup-go@v6
+        with: {go-version-file: go.mod, cache: false}
+      - uses: actions/setup-node@v6
+        with: {node-version: 22}
+      - run: go build ./...
+      - run: go vet ./...
+      - name: Run full Windows test suite
+        shell: bash
+        run: go test ./... -json -timeout 15m > windows-tests.json || true
+      - name: Check known Windows failures
+        shell: bash
+        run: node scripts/windows/check-windows-tests.mjs windows-tests.json
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

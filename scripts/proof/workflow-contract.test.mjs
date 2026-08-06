@@ -16,12 +16,12 @@ test("candidate code runs only in the restricted pull-request workflow", () => {
   for (const command of ["go test -race ./...", "golangci-lint-action", "scripts/check-docs.sh", "node --test scripts/proof/"]) {
     assert.match(hosted, new RegExp(command.replaceAll("/", "\\/")));
   }
-  for (const job of ["go_tests", "lint", "docs", "proof_scripts"]) assert.doesNotMatch(required, new RegExp(`^  ${job}:`, "m"));
+  for (const job of ["go_tests", "go_tests_windows", "lint", "docs", "proof_scripts"]) assert.doesNotMatch(required, new RegExp(`^  ${job}:`, "m"));
   assert.doesNotMatch(required, /allow-unsafe-pr-checkout/);
 });
 
-test("four hosted jobs are parallel, credentialless, cacheless, and cancelable", () => {
-  for (const job of ["go_tests", "lint", "docs", "proof_scripts"]) {
+test("five hosted jobs are parallel, credentialless, cacheless, and cancelable", () => {
+  for (const job of ["go_tests", "go_tests_windows", "lint", "docs", "proof_scripts"]) {
     const start = hosted.indexOf(`  ${job}:`);
     const nextMatch = hosted.slice(start + 3).match(/^  [a-z_]+:/m);
     const next = nextMatch ? start + 3 + nextMatch.index : -1;
