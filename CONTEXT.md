@@ -10,7 +10,7 @@ _Avoid_: Plugin test code, batch test runner, gg_klv_push test harness
 
 **maya-stall**:
 The command-line binary for Maya Stall.
-_Avoid_: gg_maya_stall when referring to the command users run
+_Avoid_: maya_stall when referring to the command users run
 
 **Consuming Repo**:
 A repository that supplies Maya Stall with non-secret run configuration, test payloads, and build artifacts.

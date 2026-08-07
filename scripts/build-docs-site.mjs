@@ -5,8 +5,8 @@ const root = path.resolve(new URL("..", import.meta.url).pathname);
 const docsDir = path.join(root, "docs");
 const outDir = path.join(root, "dist", "docs-site");
 const siteName = "Maya Stall Docs";
-const repoEditBase = "https://github.com/BramVR/gg_maya_stall/edit/main/docs";
-const repoSourceBase = "https://github.com/BramVR/gg_maya_stall/blob/main";
+const repoEditBase = "https://github.com/BramVR/maya_stall/edit/main/docs";
+const repoSourceBase = "https://github.com/BramVR/maya_stall/blob/main";
 
 const sections = [
   ["Start", ["README.md", "getting-started.md", "cli.md", "concepts.md", "source-map.md"]],

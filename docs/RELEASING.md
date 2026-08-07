@@ -21,8 +21,8 @@ Use `v1.0.0` only after Bram confirms:
 1. Start from a clean `main`.
 2. Fetch and fast-forward to `origin/main`.
 3. Confirm the intended release head with `git rev-parse HEAD`.
-4. Confirm no release already exists with `git tag --list` and `gh release list --repo BramVR/gg_maya_stall`.
-5. Check open release blockers with `gh issue list --repo BramVR/gg_maya_stall --state open` and `gh pr list --repo BramVR/gg_maya_stall --state open`.
+4. Confirm no release already exists with `git tag --list` and `gh release list --repo BramVR/maya_stall`.
+5. Check open release blockers with `gh issue list --repo BramVR/maya_stall --state open` and `gh pr list --repo BramVR/maya_stall --state open`.
 6. Recheck dependency freshness. Do not accept dependency churn only to make the graph look newer.
 7. Choose the release version and update `CHANGELOG.md`: move the proposed notes under the chosen version, add the release date, and open a fresh top `Unreleased` section.
 8. Do not change code version metadata, package metadata, tags, environments, or release assets unless that exact release execution has been approved.
@@ -104,7 +104,7 @@ GitHub Release from that existing tag:
 git tag -a v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
 gh release create v0.1.0 \
-  --repo BramVR/gg_maya_stall \
+  --repo BramVR/maya_stall \
   --verify-tag \
   --draft \
   --title "v0.1.0" \
@@ -115,7 +115,7 @@ Publish the draft only after the final release view matches the intended
 release notes, target commit, proof links, and assets:
 
 ```sh
-gh release edit v0.1.0 --repo BramVR/gg_maya_stall --draft=false
+gh release edit v0.1.0 --repo BramVR/maya_stall --draft=false
 ```
 
 If release assets are added later, build them from the tag, publish checksums,
@@ -128,7 +128,7 @@ checklist.
 Verify:
 
 - `git ls-remote --tags origin v0.1.0` returns the pushed tag;
-- `gh release view v0.1.0 --repo BramVR/gg_maya_stall` shows the expected title, body, target commit, and assets;
+- `gh release view v0.1.0 --repo BramVR/maya_stall` shows the expected title, body, target commit, and assets;
 - release notes link the changelog section, CI runs, live proof run, and proof artifact when applicable;
 - a clean checkout at the tag builds and passes the chosen smoke command;
 - no generated release note or public proof text failed the confidentiality gate.

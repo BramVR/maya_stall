@@ -20,9 +20,9 @@ seconds. Live queue and execution are reported separately because they measure
 protected-runner capacity and real Maya proof, not hosted feedback.
 
 The representative successful run is
-<https://github.com/BramVR/gg_maya_stall/actions/runs/29153711052>. The
+<https://github.com/BramVR/maya_stall/actions/runs/29153711052>. The
 latest-head cancellation proof is
-<https://github.com/BramVR/gg_maya_stall/actions/runs/29153790625>.
+<https://github.com/BramVR/maya_stall/actions/runs/29153790625>.
 
 Use `scripts/proof/report-ci-timing.mjs` as documented in
 `docs/agents/pr-merge.md` to refresh these measurements.

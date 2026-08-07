@@ -1,4 +1,4 @@
-module github.com/BramVR/gg_maya_stall
+module github.com/BramVR/maya_stall
 
 go 1.25.0
 

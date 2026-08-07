@@ -52,7 +52,7 @@ Maya Stall uses Crabbox as a reference and may selectively vendor MIT-licensed C
 
 ## Implementation Decisions
 
-- Build a Go CLI named `maya-stall`; the repo remains `gg_maya_stall`.
+- Build a Go CLI named `maya-stall`; the repository is `maya_stall`.
 
 - Use `.maya-stall.yaml` and `maya-stall.yaml` as repo config filenames.
 

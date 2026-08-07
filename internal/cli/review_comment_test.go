@@ -43,11 +43,11 @@ func TestReviewCommentMarkdownRendersFromPublishedManifest(t *testing.T) {
 func TestGitHubReviewCommentShapesCreateAndUpdate(t *testing.T) {
 	markdown := "<!-- maya-stall:evidence-comment -->\n## Maya Stall Evidence\n"
 	options := githubReviewCommentOptions{
-		Repo:        "BramVR/gg_maya_stall",
+		Repo:        "BramVR/maya_stall",
 		PullRequest: 12,
 		Token:       "fake-github-token",
 	}
-	marker := reviewCommentMarkerForTarget("github", "BramVR/gg_maya_stall#12")
+	marker := reviewCommentMarkerForTarget("github", "BramVR/maya_stall#12")
 	postedMarkdown := reviewMarkdownForPost(markdown, marker)
 
 	t.Run("create", func(t *testing.T) {
@@ -70,8 +70,8 @@ func TestGitHubReviewCommentShapesCreateAndUpdate(t *testing.T) {
 			t.Fatalf("request count = %d, want 3", len(api.requests))
 		}
 		assertReviewAPIRequest(t, api.requests[0], "GET", "https://api.github.com/user", "")
-		assertReviewAPIRequest(t, api.requests[1], "GET", "https://api.github.com/repos/BramVR/gg_maya_stall/issues/12/comments?per_page=100", "")
-		assertReviewAPIRequest(t, api.requests[2], "POST", "https://api.github.com/repos/BramVR/gg_maya_stall/issues/12/comments", postedMarkdown)
+		assertReviewAPIRequest(t, api.requests[1], "GET", "https://api.github.com/repos/BramVR/maya_stall/issues/12/comments?per_page=100", "")
+		assertReviewAPIRequest(t, api.requests[2], "POST", "https://api.github.com/repos/BramVR/maya_stall/issues/12/comments", postedMarkdown)
 		if got := api.requests[2].Headers["Authorization"]; got != "Bearer fake-github-token" {
 			t.Fatalf("GitHub auth header = %q", got)
 		}
@@ -96,7 +96,7 @@ func TestGitHubReviewCommentShapesCreateAndUpdate(t *testing.T) {
 		if len(api.requests) != 3 {
 			t.Fatalf("request count = %d, want 3", len(api.requests))
 		}
-		assertReviewAPIRequest(t, api.requests[2], "PATCH", "https://api.github.com/repos/BramVR/gg_maya_stall/issues/comments/202", postedMarkdown)
+		assertReviewAPIRequest(t, api.requests[2], "PATCH", "https://api.github.com/repos/BramVR/maya_stall/issues/comments/202", postedMarkdown)
 	})
 
 	t.Run("update from paginated lookup", func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestGitHubReviewCommentShapesCreateAndUpdate(t *testing.T) {
 				{StatusCode: 200, Body: []byte(`{"login":"maya-stall-bot"}`)},
 				{
 					StatusCode: 200,
-					Headers:    map[string]string{"Link": `<https://api.github.com/repos/BramVR/gg_maya_stall/issues/12/comments?per_page=100&page=2>; rel="next"`},
+					Headers:    map[string]string{"Link": `<https://api.github.com/repos/BramVR/maya_stall/issues/12/comments?per_page=100&page=2>; rel="next"`},
 					Body:       []byte(`[{"id":201,"body":"not ours","user":{"login":"someone-else"}}]`),
 				},
 				{StatusCode: 200, Body: []byte(`[{"id":203,"body":"` + marker + `\nold","user":{"login":"maya-stall-bot"}}]`)},
@@ -123,15 +123,15 @@ func TestGitHubReviewCommentShapesCreateAndUpdate(t *testing.T) {
 		if len(api.requests) != 4 {
 			t.Fatalf("request count = %d, want 4", len(api.requests))
 		}
-		assertReviewAPIRequest(t, api.requests[2], "GET", "https://api.github.com/repos/BramVR/gg_maya_stall/issues/12/comments?per_page=100&page=2", "")
-		assertReviewAPIRequest(t, api.requests[3], "PATCH", "https://api.github.com/repos/BramVR/gg_maya_stall/issues/comments/203", postedMarkdown)
+		assertReviewAPIRequest(t, api.requests[2], "GET", "https://api.github.com/repos/BramVR/maya_stall/issues/12/comments?per_page=100&page=2", "")
+		assertReviewAPIRequest(t, api.requests[3], "PATCH", "https://api.github.com/repos/BramVR/maya_stall/issues/comments/203", postedMarkdown)
 	})
 }
 
 func TestGitLabReviewCommentShapesMergeRequestNote(t *testing.T) {
 	markdown := "<!-- maya-stall:evidence-comment -->\n## Maya Stall Evidence\n"
 	options := gitLabReviewCommentOptions{
-		Project:      "BramVR/gg_maya_stall",
+		Project:      "BramVR/maya_stall",
 		MergeRequest: 12,
 		Token:        "fake-gitlab-token",
 		BaseURL:      "https://gitlab.example.test",
@@ -157,8 +157,8 @@ func TestGitLabReviewCommentShapesMergeRequestNote(t *testing.T) {
 		t.Fatalf("request count = %d, want 3", len(api.requests))
 	}
 	assertReviewAPIRequest(t, api.requests[0], "GET", "https://gitlab.example.test/api/v4/user", "")
-	assertReviewAPIRequest(t, api.requests[1], "GET", "https://gitlab.example.test/api/v4/projects/BramVR%2Fgg_maya_stall/merge_requests/12/notes?per_page=100", "")
-	assertReviewAPIRequest(t, api.requests[2], "POST", "https://gitlab.example.test/api/v4/projects/BramVR%2Fgg_maya_stall/merge_requests/12/notes", postedMarkdown)
+	assertReviewAPIRequest(t, api.requests[1], "GET", "https://gitlab.example.test/api/v4/projects/BramVR%2Fmaya_stall/merge_requests/12/notes?per_page=100", "")
+	assertReviewAPIRequest(t, api.requests[2], "POST", "https://gitlab.example.test/api/v4/projects/BramVR%2Fmaya_stall/merge_requests/12/notes", postedMarkdown)
 	if got := api.requests[2].Headers["Private-Token"]; got != "fake-gitlab-token" {
 		t.Fatalf("GitLab token header = %q", got)
 	}
@@ -181,8 +181,8 @@ func TestGitLabReviewCommentShapesMergeRequestNote(t *testing.T) {
 	if len(api.requests) != 4 {
 		t.Fatalf("request count = %d, want 4", len(api.requests))
 	}
-	assertReviewAPIRequest(t, api.requests[2], "GET", "https://gitlab.example.test/api/v4/projects/BramVR%2Fgg_maya_stall/merge_requests/12/notes?page=2&per_page=100", "")
-	assertReviewAPIRequest(t, api.requests[3], "PUT", "https://gitlab.example.test/api/v4/projects/BramVR%2Fgg_maya_stall/merge_requests/12/notes/304", postedMarkdown)
+	assertReviewAPIRequest(t, api.requests[2], "GET", "https://gitlab.example.test/api/v4/projects/BramVR%2Fmaya_stall/merge_requests/12/notes?page=2&per_page=100", "")
+	assertReviewAPIRequest(t, api.requests[3], "PUT", "https://gitlab.example.test/api/v4/projects/BramVR%2Fmaya_stall/merge_requests/12/notes/304", postedMarkdown)
 }
 
 func TestReviewCommentCommandDryRunUsesPublishedManifest(t *testing.T) {
@@ -190,14 +190,14 @@ func TestReviewCommentCommandDryRunUsesPublishedManifest(t *testing.T) {
 	published := writePublishedManifestFixture(t, dir)
 	var stdout, stderr strings.Builder
 
-	code := Run([]string{"review-comment", "github", "--repo", "BramVR/gg_maya_stall", "--pr", "12", "--dry-run", published}, &stdout, &stderr, dir, "test-version")
+	code := Run([]string{"review-comment", "github", "--repo", "BramVR/maya_stall", "--pr", "12", "--dry-run", published}, &stdout, &stderr, dir, "test-version")
 	if code != 0 {
 		t.Fatalf("review-comment dry-run exit code = %d, want 0; stdout: %s stderr: %s", code, stdout.String(), stderr.String())
 	}
 	for _, want := range []string{
 		"platform: github",
 		"operation: dry-run",
-		"target: BramVR/gg_maya_stall#12",
+		"target: BramVR/maya_stall#12",
 		"reviewComment:",
 	} {
 		if !strings.Contains(stdout.String(), want) {
@@ -218,7 +218,7 @@ func TestReviewCommentCommandMissingCredentialsAreClear(t *testing.T) {
 	published := writePublishedManifestFixture(t, dir)
 	var stdout, stderr strings.Builder
 
-	code := Run([]string{"review-comment", "github", "--repo", "BramVR/gg_maya_stall", "--pr", "12", "--token-env", "MAYA_STALL_TEST_MISSING_TOKEN", published}, &stdout, &stderr, dir, "test-version")
+	code := Run([]string{"review-comment", "github", "--repo", "BramVR/maya_stall", "--pr", "12", "--token-env", "MAYA_STALL_TEST_MISSING_TOKEN", published}, &stdout, &stderr, dir, "test-version")
 	if code != 2 {
 		t.Fatalf("review-comment exit code = %d, want 2; stdout: %s stderr: %s", code, stdout.String(), stderr.String())
 	}
@@ -246,7 +246,7 @@ func TestReviewCommentCommandRejectsWrongPlatformURLFlags(t *testing.T) {
 	published := writePublishedManifestFixture(t, dir)
 	var stdout, stderr strings.Builder
 
-	code := Run([]string{"review-comment", "github", "--repo", "BramVR/gg_maya_stall", "--pr", "12", "--base-url", "https://gitlab.example.test", "--dry-run", published}, &stdout, &stderr, dir, "test-version")
+	code := Run([]string{"review-comment", "github", "--repo", "BramVR/maya_stall", "--pr", "12", "--base-url", "https://gitlab.example.test", "--dry-run", published}, &stdout, &stderr, dir, "test-version")
 	if code != 2 {
 		t.Fatalf("github wrong URL flag exit code = %d, want 2; stdout: %s stderr: %s", code, stdout.String(), stderr.String())
 	}
@@ -256,7 +256,7 @@ func TestReviewCommentCommandRejectsWrongPlatformURLFlags(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run([]string{"review-comment", "gitlab", "--project", "BramVR/gg_maya_stall", "--merge-request", "12", "--api-url", "https://github.example.test", "--dry-run", published}, &stdout, &stderr, dir, "test-version")
+	code = Run([]string{"review-comment", "gitlab", "--project", "BramVR/maya_stall", "--merge-request", "12", "--api-url", "https://github.example.test", "--dry-run", published}, &stdout, &stderr, dir, "test-version")
 	if code != 2 {
 		t.Fatalf("gitlab wrong URL flag exit code = %d, want 2; stdout: %s stderr: %s", code, stdout.String(), stderr.String())
 	}

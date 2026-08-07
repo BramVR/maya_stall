@@ -2,7 +2,7 @@
 
 # Maya Stall
 
-[![CI](https://github.com/BramVR/gg_maya_stall/actions/workflows/ci-required.yml/badge.svg)](https://github.com/BramVR/gg_maya_stall/actions/workflows/ci-required.yml)
+[![CI](https://github.com/BramVR/maya_stall/actions/workflows/ci-required.yml/badge.svg)](https://github.com/BramVR/maya_stall/actions/workflows/ci-required.yml)
 [![Go 1.25](https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white)](go.mod)
 
 **Run real Autodesk Maya UI Scenarios from repo-owned config.**
@@ -52,13 +52,17 @@ between untrusted users.
 
 ## How It Works
 
-```text
-consuming repo              maya-stall CLI             Windows Maya Host
--------------               --------------             -----------------
-.maya-stall.yaml  ----->    select Scenario      SSH   clean run workspace
-payload paths                stage payload       ---->  Session Broker
-validators                   collect evidence    <----  Maya UI Session
-review target                publish comment            screenshots
+Headless checks and process exit codes cannot prove that a workflow works in
+an interactive Maya desktop. Maya Stall owns the path from a repo-declared
+Scenario to trustworthy, review-ready proof:
+
+```mermaid
+flowchart LR
+    gap["Headless CI<br/>cannot prove real Maya UI"] -->|"solved by"| stall["Maya Stall"]
+    repo["Consuming Repo<br/>Scenario + declared payload"] --> stall
+    stall -->|"Host Lock + Session Broker"| host["Owned Windows Maya Host<br/>interactive Maya UI"]
+    host --> evidence["Evidence Bundle<br/>results + logs + visuals"]
+    evidence --> outcome["Trustworthy outcome<br/>Validators + evidence + cleanup state"]
 ```
 
 - **CLI** - Go binary under `cmd/maya-stall`. Owns config loading, Scenario

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/BramVR/gg_maya_stall/internal/cli"
+	"github.com/BramVR/maya_stall/internal/cli"
 )
 
 var version = "dev"
