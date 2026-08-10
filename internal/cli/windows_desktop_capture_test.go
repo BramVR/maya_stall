@@ -79,6 +79,16 @@ func TestWindowsDesktopScreenshotTranscodesHostJPEGToPNG(t *testing.T) {
 	}
 }
 
+func TestWindowsDesktopScreenshotWaitsForCompletedImage(t *testing.T) {
+	script := windowsDesktopScreenshotPowerShell("C:/maya-stall/artifacts/proof")
+	if !strings.Contains(script, `$done = $out + ".done"`) || !strings.Contains(script, `Set-Content -LiteralPath ("__MAYA_STALL_SCREENSHOT_OUT__" + ".done") -Value "ok"`) {
+		t.Fatalf("desktop screenshot task must publish an explicit completion marker after saving the image:\n%s", script)
+	}
+	if !strings.Contains(script, `(Test-Path -LiteralPath $done) -and (Test-Path -LiteralPath $out)`) {
+		t.Fatalf("desktop screenshot controller must wait for the completion marker before reading the image:\n%s", script)
+	}
+}
+
 func TestSSHWindowsDesktopTransportStreamsLongPowerShellOverStdin(t *testing.T) {
 	script := windowsDesktopScreenshotPowerShell("C:/maya-stall/runs/run-123/visual-evidence/screenshot")
 	encoded := strings.Join(encodedPowerShellCommand(script), " ")

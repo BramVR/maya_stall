@@ -256,6 +256,7 @@ New-Item -ItemType Directory -Force -Path $root | Out-Null
 if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) { throw "schtasks.exe is required for interactive desktop capture" }
 $taskName = "MayaStallVisualEvidenceScreenshot-" + [Guid]::NewGuid().ToString("N")
 $out = Join-Path $root "desktop-screenshot.jpg"
+$done = $out + ".done"
 $script = Join-Path $root ($taskName + ".ps1")
 $template = @'
 $ErrorActionPreference = "Stop"
@@ -273,6 +274,7 @@ $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bound
 $bitmap.Save("__MAYA_STALL_SCREENSHOT_OUT__", [System.Drawing.Imaging.ImageFormat]::Jpeg)
 $graphics.Dispose()
 $bitmap.Dispose()
+Set-Content -LiteralPath ("__MAYA_STALL_SCREENSHOT_OUT__" + ".done") -Value "ok"
 '@
 try {
   $template.Replace("__MAYA_STALL_SCREENSHOT_OUT__", $out.Replace("\", "\\")) | Set-Content -Encoding ASCII -LiteralPath $script
@@ -284,7 +286,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "failed to create interactive desktop screenshot task with schtasks.exe /IT; ensure an interactive desktop session is logged in" }
   schtasks.exe /Run /TN $taskName | Out-Null
   for ($i = 0; $i -lt 40; $i++) {
-    if ((Test-Path -LiteralPath $out) -and (Get-Item -LiteralPath $out).Length -gt 0) {
+    if ((Test-Path -LiteralPath $done) -and (Test-Path -LiteralPath $out) -and (Get-Item -LiteralPath $out).Length -gt 0) {
       try {
         $stream = [IO.File]::Open($out, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         try {
