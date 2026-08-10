@@ -317,31 +317,7 @@ type liveLocalSessiondProof struct {
 
 func inspectLiveLocalSessiondProof(t *testing.T, host mayaHostConfig, proofRoot, workRoot, stateDir, consumerRoot, evidenceDir, runID string, port int) liveLocalSessiondProof {
 	t.Helper()
-	script := fmt.Sprintf(`$ErrorActionPreference = "Stop"
-$e = %s
-$bundle = Get-Content -LiteralPath (Join-Path $e "evidence.json") -Raw | ConvertFrom-Json
-$manifest = Get-Content -LiteralPath (Join-Path $e "manifest.json") -Raw | ConvertFrom-Json
-$input = $manifest.payload | Where-Object {$_.name -eq "scene"} | Select-Object -First 1
-$output = Get-Content -LiteralPath (Join-Path $e "outputs/runtime-input-proof.json") -Raw | ConvertFrom-Json
-$shot = $bundle.visualEvidence | Select-Object -First 1
-$shotPath = Join-Path $e $shot.path
-$bytes = [IO.File]::ReadAllBytes($shotPath)
-Push-Location -LiteralPath %s
-try { $status = & %s -m gg_maya_sessiond.cli status --state-dir %s --json | Out-String | ConvertFrom-Json } finally { Pop-Location }
-$owner = Get-Content -LiteralPath %s -Raw | ConvertFrom-Json
-$ownedAlive = $false
-foreach ($pidValue in @($status.state.daemon_pid,$status.state.maya_pid,$status.state.mcp_pid)) { if ($pidValue -and (Get-Process -Id $pidValue -ErrorAction SilentlyContinue)) { $ownedAlive = $true } }
-$validatorsPassed = @($bundle.validators | Where-Object {$_.status -ne "passed"}).Count -eq 0
-[pscustomobject]@{
- status=$bundle.status; runtime=$bundle.runtime.profile; hostAdapter=$bundle.runtime.hostAdapter; brokerSession=$bundle.brokerSession.sessionId; stoppedSession=$status.state.session_id
- lockSession=$owner.lockSession; lockRun=$owner.lockRun; mayaSessionId=$owner.mayaSessionId
- inputName=$input.name; inputKind=$input.kind; inputSourcePresent=($input.PSObject.Properties.Name -contains "source")
- sourceUnchanged=((Get-FileHash -Algorithm SHA256 -LiteralPath %s).Hash.ToLower() -eq $input.sha256); stagedMutated=($output.before -ne $output.after)
- screenshotOrigin=$shot.origin; screenshotBytes=$bytes.Length; screenshotPNG=([BitConverter]::ToString($bytes[0..7]) -eq "89-50-4E-47-0D-0A-1A-0A"); screenshotHashMatch=((Get-FileHash -Algorithm SHA256 -LiteralPath $shotPath).Hash.ToLower() -eq $shot.sha256)
- validatorsPassed=$validatorsPassed; sessiondStatus=$status.derived_status; sessiondMayaAlive=[bool]$status.process_alive.maya; sessiondMCPAlive=[bool]$status.process_alive.mcp; ownedProcessAlive=$ownedAlive
- hostLockExists=(Test-Path -LiteralPath %s); runRootExists=(Test-Path -LiteralPath %s); localRunStateExists=(Test-Path -LiteralPath %s); portListening=[bool](Get-NetTCPConnection -State Listen -LocalPort %d -ErrorAction SilentlyContinue)
-} | ConvertTo-Json -Compress
-`, powerShellSingleQuoted(evidenceDir), powerShellSingleQuoted(host.Broker.Repo), powerShellSingleQuoted(host.Broker.Python), powerShellSingleQuoted(stateDir), powerShellSingleQuoted(remoteJoin(proofRoot, "ownership.json")), powerShellSingleQuoted(remoteJoin(proofRoot, "input.ma")), powerShellSingleQuoted(remoteJoin(workRoot, "state", "locks", "hosts", "host.lock")), powerShellSingleQuoted(remoteJoin(workRoot, "runs", runID)), powerShellSingleQuoted(remoteJoin(consumerRoot, ".maya-stall", "state", "runs", runID)), port)
+	script := liveLocalSessiondInspectionPowerShell(proofRoot, workRoot, stateDir, consumerRoot, evidenceDir, runID, port)
 	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(script), sessiondCommandTimeout)
 	if err != nil {
 		t.Fatalf("inspect local Sessiond live proof: %v", err)
@@ -351,6 +327,45 @@ $validatorsPassed = @($bundle.validators | Where-Object {$_.status -ne "passed"}
 		t.Fatalf("parse local Sessiond live proof: %v: %s", err, strings.TrimSpace(string(raw)))
 	}
 	return proof
+}
+
+func liveLocalSessiondInspectionPowerShell(proofRoot, workRoot, stateDir, consumerRoot, evidenceDir, runID string, port int) string {
+	return fmt.Sprintf(`$ErrorActionPreference = "Stop"
+$e = %s
+$bundle = Get-Content -LiteralPath (Join-Path $e "evidence.json") -Raw | ConvertFrom-Json
+$manifest = Get-Content -LiteralPath (Join-Path $e "manifest.json") -Raw | ConvertFrom-Json
+$input = $manifest.payload | Where-Object {$_.name -eq "scene"} | Select-Object -First 1
+$output = Get-Content -LiteralPath (Join-Path $e "outputs/runtime-input-proof.json") -Raw | ConvertFrom-Json
+$shot = $bundle.visualEvidence | Select-Object -First 1
+$shotPath = Join-Path $e $shot.path
+$bytes = [IO.File]::ReadAllBytes($shotPath)
+$state = Get-Content -LiteralPath (Join-Path %s "state.json") -Raw | ConvertFrom-Json
+$owner = Get-Content -LiteralPath %s -Raw | ConvertFrom-Json
+$mayaAlive = [bool]($state.maya_pid -and (Get-Process -Id $state.maya_pid -ErrorAction SilentlyContinue))
+$mcpAlive = [bool]($state.mcp_pid -and (Get-Process -Id $state.mcp_pid -ErrorAction SilentlyContinue))
+$ownedAlive = $false
+foreach ($pidValue in @($state.daemon_pid,$state.maya_pid,$state.mcp_pid)) { if ($pidValue -and (Get-Process -Id $pidValue -ErrorAction SilentlyContinue)) { $ownedAlive = $true } }
+$validatorsPassed = @($bundle.validators | Where-Object {$_.status -ne "passed"}).Count -eq 0
+[pscustomobject]@{
+ status=$bundle.status; runtime=$bundle.runtime.profile; hostAdapter=$bundle.runtime.hostAdapter; brokerSession=$bundle.brokerSession.sessionId; stoppedSession=$state.session_id
+ lockSession=$owner.lockSession; lockRun=$owner.lockRun; mayaSessionId=$owner.mayaSessionId
+ inputName=$input.name; inputKind=$input.kind; inputSourcePresent=($input.PSObject.Properties.Name -contains "source")
+ sourceUnchanged=((Get-FileHash -Algorithm SHA256 -LiteralPath %s).Hash.ToLower() -eq $input.sha256); stagedMutated=($output.before -ne $output.after)
+ screenshotOrigin=$shot.origin; screenshotBytes=$bytes.Length; screenshotPNG=([BitConverter]::ToString($bytes[0..7]) -eq "89-50-4E-47-0D-0A-1A-0A"); screenshotHashMatch=((Get-FileHash -Algorithm SHA256 -LiteralPath $shotPath).Hash.ToLower() -eq $shot.sha256)
+ validatorsPassed=$validatorsPassed; sessiondStatus=$state.status; sessiondMayaAlive=$mayaAlive; sessiondMCPAlive=$mcpAlive; ownedProcessAlive=$ownedAlive
+ hostLockExists=(Test-Path -LiteralPath %s); runRootExists=(Test-Path -LiteralPath %s); localRunStateExists=(Test-Path -LiteralPath %s); portListening=[bool](Get-NetTCPConnection -State Listen -LocalPort %d -ErrorAction SilentlyContinue)
+} | ConvertTo-Json -Compress
+`, powerShellSingleQuoted(evidenceDir), powerShellSingleQuoted(stateDir), powerShellSingleQuoted(remoteJoin(proofRoot, "ownership.json")), powerShellSingleQuoted(remoteJoin(proofRoot, "input.ma")), powerShellSingleQuoted(remoteJoin(workRoot, "state", "locks", "hosts", "host.lock")), powerShellSingleQuoted(remoteJoin(workRoot, "runs", runID)), powerShellSingleQuoted(remoteJoin(consumerRoot, ".maya-stall", "state", "runs", runID)), port)
+}
+
+func TestLiveLocalSessiondInspectionUsesTerminalStateFile(t *testing.T) {
+	script := liveLocalSessiondInspectionPowerShell("C:/proof", "C:/work", "C:/state", "C:/consumer", "C:/evidence", "run-id", 23456)
+	if !strings.Contains(script, `Join-Path 'C:/state' "state.json"`) {
+		t.Fatalf("inspection script does not read terminal Sessiond state: %s", script)
+	}
+	if strings.Contains(script, "gg_maya_sessiond.cli status") {
+		t.Fatalf("inspection script must not launch a second Sessiond CLI status process: %s", script)
+	}
 }
 
 func cleanupLocalSessiondLiveProof(t *testing.T, host mayaHostConfig, proofRoot, taskName string) {

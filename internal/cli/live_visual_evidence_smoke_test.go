@@ -837,13 +837,16 @@ func liveDesktopControlScreenshotArtifact(bundle evidenceBundle) (visualEvidence
 }
 
 const (
-	liveDesktopControlModalLeft   = 120
-	liveDesktopControlModalTop    = 120
-	liveDesktopControlModalButton = 130
-	liveDesktopControlModalClickX = 300
-	liveDesktopControlModalClickY = 251
-	defaultLiveSessiondUITaskName = "MayaStallSessiondUI"
-	smokeSessiondUITaskEnv        = "MAYA_STALL_SMOKE_SESSIOND_UI_TASK"
+	liveDesktopControlModalLeft    = 120
+	liveDesktopControlModalTop     = 120
+	liveDesktopControlModalButton  = 130
+	liveDesktopControlModalClickX  = 300
+	liveDesktopControlModalClickY  = 251
+	liveDesktopControlPollAttempts = 40
+	liveDesktopControlPollInterval = 250 * time.Millisecond
+	liveDesktopControlCloseTimeout = sshCommandTimeout
+	defaultLiveSessiondUITaskName  = "MayaStallSessiondUI"
+	smokeSessiondUITaskEnv         = "MAYA_STALL_SMOKE_SESSIOND_UI_TASK"
 )
 
 type liveDesktopControlModalFixture struct {
@@ -885,7 +888,7 @@ func launchLiveDesktopControlModalFixture(t *testing.T, host mayaHostConfig) liv
 
 func waitForLiveDesktopControlModalClosed(t *testing.T, host mayaHostConfig, fixture liveDesktopControlModalFixture) {
 	t.Helper()
-	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(liveDesktopControlModalClosedPowerShell(fixture)), 10*time.Second)
+	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(liveDesktopControlModalClosedPowerShell(fixture)), liveDesktopControlCloseTimeout)
 	if err != nil {
 		t.Fatalf("wait for live desktop control modal fixture to close: %v: %s", err, strings.TrimSpace(string(raw)))
 	}
@@ -935,7 +938,7 @@ cd %s
 		powerShellSingleQuoted(python),
 		powerShellSingleQuoted(stateDir),
 	)
-	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(script), 10*time.Second)
+	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(script), sshCommandTimeout)
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(raw)))
 	}
@@ -1113,14 +1116,21 @@ throw "scheduled interactive desktop control modal did not appear; ensure an int
 func liveDesktopControlModalClosedPowerShell(fixture liveDesktopControlModalFixture) string {
 	return fmt.Sprintf(`$ErrorActionPreference = "Stop"
 $closed = Join-Path %s "desktop-control-modal.closed"
-for ($i = 0; $i -lt 40; $i++) {
+for ($i = 0; $i -lt %d; $i++) {
   if (Test-Path -LiteralPath $closed) {
     Write-Output "closed"
     exit 0
   }
-  Start-Sleep -Milliseconds 250
+  Start-Sleep -Milliseconds %d
 }
-throw "desktop control modal fixture did not close after click"`, powerShellSingleQuoted(fixture.RemoteRoot))
+throw "desktop control modal fixture did not close after click"`, powerShellSingleQuoted(fixture.RemoteRoot), liveDesktopControlPollAttempts, liveDesktopControlPollInterval.Milliseconds())
+}
+
+func TestLiveDesktopControlCloseTimeoutExceedsRemotePollBudget(t *testing.T) {
+	remotePollBudget := time.Duration(liveDesktopControlPollAttempts) * liveDesktopControlPollInterval
+	if liveDesktopControlCloseTimeout <= remotePollBudget {
+		t.Fatalf("desktop control close timeout %s must exceed remote poll budget %s", liveDesktopControlCloseTimeout, remotePollBudget)
+	}
 }
 
 func liveDesktopControlModalCleanupPowerShell(fixture liveDesktopControlModalFixture) string {
