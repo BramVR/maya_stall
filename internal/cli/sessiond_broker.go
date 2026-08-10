@@ -21,6 +21,7 @@ const (
 	sessiondCommandTimeout        = 2 * time.Minute
 	sessiondSessionStartTimeout   = 5 * time.Minute
 	sessiondSessionPollInterval   = 5 * time.Second
+	sessiondReadinessProbeTimeout = 30 * time.Second
 	sessiondRecoveryTimeout       = 3 * time.Minute
 	defaultSessiondRecoveryTask   = "MayaStallSessiondUI"
 	sessiondReasonCommandPortDown = "command-port-unreachable"
@@ -28,9 +29,15 @@ const (
 
 var errSSHCommandTimedOut = errors.New("ssh command timed out")
 
+var waitSessiondSessionPoll = func() {
+	time.Sleep(sessiondSessionPollInterval)
+}
+
 type ggMayaSessiondBroker struct {
 	host mayaHostConfig
 }
+
+var runLocalSessiondCommand = defaultRunLocalSessiondCommand
 
 type sessiondCommandResult struct {
 	OK    bool   `json:"ok"`
@@ -143,6 +150,17 @@ func (broker ggMayaSessiondBroker) VerifyMayaBuild(context runContext, session b
 	if !result.OK {
 		return fmt.Errorf("verify selected Maya build %s: gg_mayasessiond script.execute failed: %s", expected, result.Error)
 	}
+	if broker.host.usesLocalWindows() {
+		content, err := os.ReadFile(filepath.FromSlash(resultPath))
+		if err != nil {
+			return fmt.Errorf("read Maya build verification: %w", err)
+		}
+		actual := strings.TrimSpace(string(content))
+		if !sameMayaBuildVersion(actual, expected) {
+			return fmt.Errorf("selected Maya build %s but fresh Maya UI Session reports %s", expected, actual)
+		}
+		return appendEvent(context.EventsPath, "maya.build.verified", actual)
+	}
 	tempFile, err := os.CreateTemp("", "maya-stall-maya-build-*")
 	if err != nil {
 		return err
@@ -235,13 +253,52 @@ func (broker ggMayaSessiondBroker) awaitFreshSession(previousSessionID string) (
 		case previousSessionID != "" && status.State.SessionID == previousSessionID:
 			lastDetail = fmt.Sprintf("gg_mayasessiond still reports inherited session %s", previousSessionID)
 		case sessiondFreshSessionReady(status):
-			return identity, nil
+			if probeErr := broker.probeMayaToolReadiness(); probeErr == nil {
+				return identity, nil
+			} else {
+				lastDetail = fmt.Sprintf("gg_mayasessiond Maya tool readiness probe failed: %s", probeErr)
+			}
 		}
 		if !time.Now().Before(deadline) {
 			return identity, fmt.Errorf("fresh gg_mayasessiond Maya UI Session was not ready within %s: %s", sessiondSessionStartTimeout, lastDetail)
 		}
-		time.Sleep(sessiondSessionPollInterval)
+		waitSessiondSessionPoll()
 	}
+}
+
+func (broker ggMayaSessiondBroker) probeMayaToolReadiness() error {
+	result, err := broker.callTool("scene.info", nil, sessiondReadinessProbeTimeout)
+	if err != nil {
+		return fmt.Errorf("scene.info: %w", err)
+	}
+	if !result.OK {
+		if result.Error != "" {
+			return fmt.Errorf("scene.info: %s", result.Error)
+		}
+		return fmt.Errorf("scene.info did not report success")
+	}
+	if result.Tool != "scene.info" {
+		return fmt.Errorf("scene.info returned tool %q", result.Tool)
+	}
+	capture, err := broker.callReadinessCapture()
+	if err != nil {
+		return fmt.Errorf("viewport.capture: %w", err)
+	}
+	if !capture.OK {
+		if capture.Error != "" {
+			return fmt.Errorf("viewport.capture: %s", capture.Error)
+		}
+		return fmt.Errorf("viewport.capture did not report success")
+	}
+	if capture.Tool != "viewport.capture" {
+		return fmt.Errorf("viewport.capture returned tool %q", capture.Tool)
+	}
+	for _, content := range capture.Content {
+		if content.Type == "image" && content.Data != "" && strings.HasPrefix(content.MimeType, "image/") {
+			return nil
+		}
+	}
+	return fmt.Errorf("viewport.capture returned no image content")
 }
 
 func (broker ggMayaSessiondBroker) stopSessiondSession() error {
@@ -310,10 +367,16 @@ func (broker ggMayaSessiondBroker) CaptureScreenshot(context runContext, request
 		return visualEvidenceArtifact{}, err
 	}
 	remoteRoot := broker.remoteVisualEvidenceRoot(context, "screenshot")
-	defer func() {
-		_ = broker.removeRemotePath(remoteRoot)
-	}()
-	data, err := captureWindowsDesktopScreenshot(sshWindowsDesktopTransport(broker.host), remoteRoot)
+	var data []byte
+	var err error
+	if broker.host.usesLocalWindows() {
+		data, err = captureLocalWindowsDesktopScreenshot(broker.windowsDesktopTransport())
+	} else {
+		defer func() {
+			_ = broker.removeRemotePath(remoteRoot)
+		}()
+		data, err = captureWindowsDesktopScreenshot(broker.windowsDesktopTransport(), remoteRoot)
+	}
 	if err != nil {
 		return visualEvidenceArtifact{}, err
 	}
@@ -336,7 +399,7 @@ func (broker ggMayaSessiondBroker) CaptureRecording(context runContext, request 
 	defer func() {
 		_ = broker.removeRemotePath(remoteRoot)
 	}()
-	data, err := captureWindowsDesktopRecording(sshWindowsDesktopTransport(broker.host), remoteRoot, request.Duration, request.FPS, "")
+	data, err := captureWindowsDesktopRecording(broker.windowsDesktopTransport(), remoteRoot, request.Duration, request.FPS, "")
 	if err != nil {
 		return visualEvidenceArtifact{}, err
 	}
@@ -360,7 +423,7 @@ func (broker ggMayaSessiondBroker) ClickDesktop(request desktopClickRequest) err
 	defer func() {
 		_ = broker.removeRemotePath(remoteRoot)
 	}()
-	return clickWindowsDesktop(sshWindowsDesktopTransport(broker.host), remoteRoot, request.X, request.Y)
+	return clickWindowsDesktop(broker.windowsDesktopTransport(), remoteRoot, request.X, request.Y)
 }
 
 func (broker ggMayaSessiondBroker) RetentionCapabilities() brokerCapabilities {
@@ -518,6 +581,9 @@ func (broker ggMayaSessiondBroker) remoteVisualEvidenceRoot(context runContext, 
 }
 
 func (broker ggMayaSessiondBroker) validate() error {
+	if broker.host.usesLocalWindows() {
+		return validateLocalSessiondConfig(broker.host)
+	}
 	if !broker.host.usesRealSSH() {
 		return fmt.Errorf("gg_mayasessiond broker requires transport: ssh")
 	}
@@ -553,6 +619,9 @@ func (broker ggMayaSessiondBroker) ProbeSessionBroker(timeout time.Duration) err
 	status, err := broker.preRunProbeStatus(timeout)
 	if err != nil {
 		return err
+	}
+	if broker.host.usesLocalWindows() && !status.HasState && strings.EqualFold(status.DerivedStatus, "missing") {
+		return nil
 	}
 	if !status.HasState {
 		return fmt.Errorf("gg_mayasessiond is not running: no canonical state")
@@ -730,6 +799,33 @@ func (broker ggMayaSessiondBroker) recoverSessionBroker(reason string) error {
 }
 
 func (broker ggMayaSessiondBroker) restartSessionBrokerTask(reason string) error {
+	if broker.host.usesLocalWindows() {
+		runsRoot := filepath.FromSlash(remoteJoin(broker.host.WorkRoot, "runs"))
+		if err := rejectLocalWindowsReparseAncestors(runsRoot); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(runsRoot, 0o755); err != nil {
+			return fmt.Errorf("prepare local gg_mayasessiond script allowlist root: %w", err)
+		}
+		args := []string{
+			"start",
+			"--state-dir", broker.host.Broker.StateDir,
+			"--python-exe", broker.host.Broker.Python,
+			"--maya-exe", broker.host.Broker.MayaExe,
+			"--host", "localhost",
+			"--port", strconv.Itoa(broker.host.Broker.Port),
+			"--mcp-python", localSessiondMCPPython(broker.host),
+			"--mcp-src", broker.host.Broker.MCPSource,
+			"--mcp-script-dirs", filepath.FromSlash(remoteJoin(broker.host.WorkRoot, "runs")),
+			"--startup-timeout-seconds", strconv.Itoa(int(sessiondSessionStartTimeout / time.Second)),
+			"--wait-timeout-seconds", "180",
+			"--json",
+		}
+		if _, err := broker.runSessiondCLI(args, sessiondSessionStartTimeout+sessiondCommandTimeout); err != nil {
+			return fmt.Errorf("start local gg_mayasessiond (%s): %w", reason, err)
+		}
+		return nil
+	}
 	taskName := sessiondRecoveryTaskName(broker.host)
 	if _, err := runSSHCommandOutput(broker.host, encodedPowerShellCommand(sessiondTaskRestartScript(taskName, reason)), sessiondCommandTimeout+2*time.Minute); err != nil {
 		return fmt.Errorf("restart scheduled task %q: %w", taskName, err)
@@ -957,6 +1053,18 @@ func (broker ggMayaSessiondBroker) callCapture() (sessiondCaptureResult, error) 
 	return result, nil
 }
 
+func (broker ggMayaSessiondBroker) callReadinessCapture() (sessiondCaptureResult, error) {
+	raw, err := broker.runSessiondCLI([]string{"call", "--state-dir", broker.host.Broker.StateDir, "viewport.capture", "format=jpeg", "width=64", "height=64", "quality=1", "show_ornaments=false", "--json"}, sessiondReadinessProbeTimeout)
+	if err != nil {
+		return sessiondCaptureResult{}, err
+	}
+	var result sessiondCaptureResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return sessiondCaptureResult{}, fmt.Errorf("parse gg_mayasessiond viewport.capture readiness JSON: %w", err)
+	}
+	return result, nil
+}
+
 func (broker ggMayaSessiondBroker) callTool(tool string, args []string, timeout time.Duration) (sessiondCommandResult, error) {
 	cliArgs := []string{"call", "--state-dir", broker.host.Broker.StateDir, tool}
 	cliArgs = append(cliArgs, args...)
@@ -979,6 +1087,21 @@ func (broker ggMayaSessiondBroker) runSessiondCLI(args []string, timeout time.Du
 func (broker ggMayaSessiondBroker) runSessiondCLIWithMarker(args []string, timeout time.Duration, marker string, failClosedOnTimeout bool) ([]byte, error) {
 	if err := broker.validate(); err != nil {
 		return nil, err
+	}
+	if broker.host.usesLocalWindows() {
+		raw, err := runLocalSessiondCommand(broker, args, timeout)
+		if err != nil {
+			if args[0] == "status" {
+				if jsonOutput, ok := sessiondStatusJSONFromFailedOutput(raw); ok {
+					return jsonOutput, nil
+				}
+			}
+			if jsonOutput, ok := sessiondJSONFromFailedOutput(raw); ok {
+				return jsonOutput, nil
+			}
+			return nil, fmt.Errorf("run gg_mayasessiond %s: %w", args[0], err)
+		}
+		return validateSessiondJSONOutput(args[0], raw)
 	}
 	quoted := make([]string, 0, len(args))
 	for _, arg := range args {
@@ -1003,15 +1126,31 @@ Set-Location -LiteralPath %s
 		}
 		return nil, fmt.Errorf("run gg_mayasessiond %s: %w", args[0], err)
 	}
+	return validateSessiondJSONOutput(args[0], raw)
+}
+
+func defaultRunLocalSessiondCommand(broker ggMayaSessiondBroker, args []string, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, broker.host.Broker.Python, append([]string{"-m", "gg_maya_sessiond.cli"}, args...)...)
+	command.Dir = broker.host.Broker.Repo
+	raw, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("run gg_mayasessiond %s: timed out after %s", args[0], timeout)
+	}
+	return raw, err
+}
+
+func validateSessiondJSONOutput(operation string, raw []byte) ([]byte, error) {
 	jsonOutput := trimToJSON(raw)
 	if !isSessiondJSONDocument(jsonOutput) {
 		var object map[string]json.RawMessage
 		if err := json.Unmarshal(jsonOutput, &object); err == nil && hasAnyJSONKey(object, "level", "msg") {
-			return nil, fmt.Errorf("gg_mayasessiond %s returned no sessiond JSON result", args[0])
+			return nil, fmt.Errorf("gg_mayasessiond %s returned no sessiond JSON result", operation)
 		}
 		var document json.RawMessage
 		if err := json.Unmarshal(jsonOutput, &document); err != nil {
-			return nil, fmt.Errorf("gg_mayasessiond %s returned no sessiond JSON result", args[0])
+			return nil, fmt.Errorf("gg_mayasessiond %s returned no sessiond JSON result", operation)
 		}
 	}
 	return jsonOutput, nil
@@ -1023,6 +1162,19 @@ func (broker ggMayaSessiondBroker) stageRemoteFile(path string, content []byte) 
 	}
 	if err := rejectSFTPBatchUnsafePath(path); err != nil {
 		return err
+	}
+	if broker.host.usesLocalWindows() {
+		localPath := filepath.FromSlash(path)
+		if err := requireLocalWindowsPathWithin(filepath.FromSlash(remoteJoin(broker.host.WorkRoot, "runs")), localPath); err != nil {
+			return err
+		}
+		if err := rejectLocalWindowsReparseAncestors(localPath); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(localPath, content, 0o644)
 	}
 	tempFile, err := os.CreateTemp("", "maya-stall-sessiond-*")
 	if err != nil {
@@ -1087,19 +1239,43 @@ func (broker ggMayaSessiondBroker) probeDesktopRecordingReadiness() (err error) 
 			}
 		}
 	}()
-	if _, err := captureWindowsDesktopRecording(sshWindowsDesktopTransport(broker.host), remoteRoot, time.Second, 1, ""); err != nil {
+	if _, err := captureWindowsDesktopRecording(broker.windowsDesktopTransport(), remoteRoot, time.Second, 1, ""); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (broker ggMayaSessiondBroker) removeRemotePath(path string) error {
+	if broker.host.usesLocalWindows() {
+		localPath := filepath.FromSlash(path)
+		if err := requireLocalWindowsPathWithin(filepath.FromSlash(remoteJoin(broker.host.WorkRoot, "runs")), localPath); err != nil {
+			return err
+		}
+		if err := rejectLocalWindowsReparseAncestors(localPath); err != nil {
+			return err
+		}
+		return os.RemoveAll(localPath)
+	}
 	script := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
 if (Test-Path -LiteralPath %s) {
   Remove-Item -LiteralPath %s -Recurse -Force
 }`, powerShellSingleQuoted(path), powerShellSingleQuoted(path))
 	_, err := runSSHCommandOutput(broker.host, encodedPowerShellCommand(script), sessiondCommandTimeout)
 	return err
+}
+
+func localSessiondMCPPython(host mayaHostConfig) string {
+	if value := strings.TrimSpace(host.Broker.MCPPython); value != "" {
+		return value
+	}
+	return host.Broker.Python
+}
+
+func (broker ggMayaSessiondBroker) windowsDesktopTransport() windowsDesktopTransport {
+	if broker.host.usesLocalWindows() {
+		return localWindowsDesktopTransport{workRoot: broker.host.WorkRoot}
+	}
+	return sshWindowsDesktopTransport(broker.host)
 }
 
 func captureImageData(result sessiondCaptureResult) ([]byte, string, error) {

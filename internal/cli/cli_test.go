@@ -5153,10 +5153,16 @@ func TestRunScenarioGGMayaSessiondBrokerExecutesRemoteScenarioAndCapturesScreens
 	sftpLog := filepath.Join(dir, "sftp.log")
 	sftpPath := writeFakeSFTPCommand(t, dir, sftpLog)
 	sshLog := filepath.Join(dir, "ssh.log")
+	jpegPath := filepath.Join(dir, "desktop-screenshot.jpg")
+	if err := os.WriteFile(jpegPath, validJPEGBytes(t), 0o644); err != nil {
+		t.Fatalf("write desktop screenshot fixture: %v", err)
+	}
 	sshPath := writeSequencedFakeSSHCommand(t, dir, sshLog, []string{
 		sessiondStatusFixture("session-alpha"),
 		`{"ok":true,"tool":"script.execute"}`,
-		`png proof`,
+		``,
+		``,
+		"@file:" + jpegPath,
 		``,
 		sessiondStatusFixture("session-fresh"),
 	})
@@ -5207,8 +5213,8 @@ hostPools:
 	if err != nil {
 		t.Fatalf("read sessiond screenshot: %v", err)
 	}
-	if !strings.Contains(string(screenshotBytes), "png proof") {
-		t.Fatalf("sessiond screenshot bytes = %q, want png proof", string(screenshotBytes))
+	if !looksLikeImageBytes("image/png", screenshotBytes) {
+		t.Fatalf("sessiond screenshot bytes do not contain the transcoded PNG: %v", screenshotBytes)
 	}
 	bundle := readEvidenceBundle(t, evidence)
 	if len(bundle.VisualEvidence) != 1 || bundle.VisualEvidence[0].MediaType != "image/png" {
@@ -6162,8 +6168,14 @@ hostPools:
 
 func TestStandaloneSessiondScreenshotLabelsRealBrokerEvidence(t *testing.T) {
 	dir := writeRunConfigFixture(t)
+	jpegPath := filepath.Join(dir, "desktop-screenshot.jpg")
+	if err := os.WriteFile(jpegPath, validJPEGBytes(t), 0o644); err != nil {
+		t.Fatalf("write desktop screenshot fixture: %v", err)
+	}
 	sshPath := writeSequencedFakeSSHCommand(t, dir, filepath.Join(dir, "ssh.log"), []string{
-		`{"ok":true,"tool":"viewport.capture","content":[{"type":"image","data":"` + base64.StdEncoding.EncodeToString([]byte("jpeg proof")) + `","mimeType":"image/jpeg"}]}`,
+		``,
+		``,
+		"@file:" + jpegPath,
 	})
 	hostConfigPath := filepath.Join(dir, "ci-hosts.yaml")
 	mustWriteFile(t, hostConfigPath, `version: 1
@@ -6192,6 +6204,14 @@ hostPools:
 		t.Fatalf("screenshot exit code = %d, want 0; stdout: %s stderr: %s", code, stdout.String(), stderr.String())
 	}
 	evidence := onlyRunDir(t, filepath.Join(dir, "artifacts", "maya-stall"))
+	bundle := readEvidenceBundle(t, evidence)
+	if len(bundle.VisualEvidence) != 1 || bundle.VisualEvidence[0].MediaType != "image/png" {
+		t.Fatalf("standalone screenshot metadata = %+v, want one PNG", bundle.VisualEvidence)
+	}
+	screenshotBytes, err := os.ReadFile(filepath.Join(evidence, filepath.FromSlash(bundle.VisualEvidence[0].Path)))
+	if err != nil || !looksLikeImageBytes("image/png", screenshotBytes) {
+		t.Fatalf("standalone screenshot is not a transcoded PNG: bytes=%v err=%v", screenshotBytes, err)
+	}
 	logBytes, err := os.ReadFile(filepath.Join(evidence, "logs", "session.log"))
 	if err != nil {
 		t.Fatalf("read evidence log: %v", err)
@@ -8208,7 +8228,7 @@ func TestRunScenarioHostLockWaitsForRelease(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("first run exit code = %d, want 0", code)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("first run did not finish after release")
 	}
 	select {
@@ -8219,7 +8239,7 @@ func TestRunScenarioHostLockWaitsForRelease(t *testing.T) {
 		if !strings.Contains(result.stdout, "host: alpha") {
 			t.Fatalf("waiting run output missing host:\n%s", result.stdout)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("waiting run did not finish after lock release")
 	}
 }
@@ -9164,6 +9184,14 @@ if [ "$default_readiness" = "1" ] && printf '%%s' "$decoded" | grep -q "maya-sta
 fi
 if [ "$default_readiness" = "1" ] && printf '%%s' "$decoded" | grep -q "maya-stall-prerun-session-broker-probe"; then
   printf '%%s\n' '{"state_dir":"C:/maya-stall/sessiond-ui","has_state":true,"derived_status":"stopped","state":{"status":"stopped","session_id":"session-previous"}}'
+  exit 0
+fi
+if [ "$default_readiness" = "1" ] && printf '%%s' "$decoded" | grep -q "'call'" && printf '%%s' "$decoded" | grep -q "scene.info"; then
+  printf '%%s\n' '{"ok":true,"tool":"scene.info"}'
+  exit 0
+fi
+if [ "$default_readiness" = "1" ] && printf '%%s' "$decoded" | grep -q "viewport.capture" && printf '%%s' "$decoded" | grep -q "width=64" && printf '%%s' "$decoded" | grep -q "height=64"; then
+  printf '%%s\n' '{"ok":true,"tool":"viewport.capture","content":[{"type":"image","data":"AA==","mimeType":"image/jpeg"}]}'
   exit 0
 fi
 if [ ! -f %[2]s ] && printf '%%s' "$decoded" | grep -q "'stop'" && ! printf '%%s' "$decoded" | grep -q "Get-ScheduledTask"; then

@@ -36,14 +36,23 @@ interactive sessiond UI scheduled task before proof starts and retained-stop
 smokes restore it again before the next proof step:
 
 ```sh
-go test -json ./internal/cli -run '^(TestOptInRealVisualEvidenceSmoke|TestOptInRealDesktopControlModalSmoke|TestOptInRealSSHDoctorSmoke|TestOptInRealPreRunReadinessSmoke|TestOptInRealSSHConsumingRepoSmoke|TestOptInRealSSHRunSmoke|TestOptInRealHostLockContentionAndRecoverySmoke|TestOptInRealRunScopedDesktopOpsSmoke)$' -count=1 -parallel=1 -timeout=20m
+go test -json ./internal/cli -run '^(TestOptInRealVisualEvidenceSmoke|TestOptInRealDesktopControlModalSmoke|TestOptInRealSSHDoctorSmoke|TestOptInRealPreRunReadinessSmoke|TestOptInRealSSHConsumingRepoSmoke|TestOptInRealSSHRunSmoke|TestOptInRealHostLockContentionAndRecoverySmoke|TestOptInRealRunScopedDesktopOpsSmoke|TestOptInRealLocalSessiondRuntimeInputSmoke)$' -count=1 -parallel=1 -timeout=30m
 ```
 
-The single Go process compiles and initializes the package once. All eight named
+The single Go process compiles and initializes the package once. All nine named
 tests must report individual passes; skips fail the live gate. The shared Agent
 subtest must also pass for `TestOptInRealSSHRunSmoke` to pass. `-parallel=1`
-keeps the one interactive Windows desktop serialized, while `-timeout=20m`
-leaves five minutes of the job budget for setup and proof publication.
+keeps the one interactive Windows desktop serialized, while `-timeout=30m`
+leaves ten minutes of the 40-minute job budget for setup, proof publication,
+and broker restoration.
+
+The local Sessiond smoke cross-builds the exact Windows candidate, stages it
+through the existing trusted SSH test-control channel, and uses a one-shot
+interactive task only to place that candidate in the logged-in desktop. The
+candidate itself must use `local-sessiond` direct process and local filesystem
+paths. It proves a declared Runtime Input, exact Sessiond/Host Lock ownership,
+nonempty hashed desktop evidence, source immutability, stopped broker state,
+and zero run-owned residue.
 
 That opt-in smoke runs `maya-stall doctor --scenario smoke`, then one real
 `maya-stall run smoke` through `gg_mayasessiond`, and asserts the Evidence
@@ -88,7 +97,7 @@ env -u MAYA_STALL_SMOKE_HOST \
 
 The smoke skips with an explicit reason when the config is absent, the Host
 Pool is pinned, or fewer than two compatible live Hosts are configured. It is
-not part of the required eight-test live gate because the current protected CI
+not part of the required nine-test live gate because the current protected CI
 fixture provides one Windows Maya Host.
 
 Non-live-only changes may merge with local gates plus a manifest saying

@@ -4,6 +4,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +17,8 @@ import (
 func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testing.T) {
 	transport := &fakeWindowsDesktopTransport{
 		outputs: [][]byte{
-			pngHeaderBytes(),
+			nil,
+			validJPEGBytes(t),
 			nil,
 			zipFrameArchive(t),
 		},
@@ -25,8 +29,8 @@ func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testin
 	if err != nil {
 		t.Fatalf("captureWindowsDesktopScreenshot returned error: %v", err)
 	}
-	if !bytes.Equal(screenshot, pngHeaderBytes()) {
-		t.Fatalf("screenshot bytes = %v, want PNG header", screenshot)
+	if !looksLikeImageBytes("image/png", screenshot) {
+		t.Fatalf("screenshot bytes do not contain a PNG transcoded from the Windows-host JPEG: %v", screenshot)
 	}
 
 	recording, err := captureWindowsDesktopRecording(transport, "C:/maya-stall/artifacts/proof", 2*time.Second, 2, ffmpeg)
@@ -41,8 +45,10 @@ func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testin
 	for _, want := range []string{
 		"System.Windows.Forms",
 		"System.Drawing",
+		"ImageFormat]::Jpeg",
 		"schtasks.exe",
 		"/IT",
+		"LIMITED",
 		"Compress-Archive",
 		"Remove-Item -Recurse -Force",
 		"interactive desktop session is logged in",
@@ -55,6 +61,69 @@ func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testin
 	if strings.Contains(combined, "viewport.capture") {
 		t.Fatalf("desktop capture must not use viewport.capture:\n%s", combined)
 	}
+	if strings.Contains(combined, "HIGHEST") {
+		t.Fatalf("desktop capture must not require an elevated scheduled task:\n%s", combined)
+	}
+}
+
+func TestWindowsDesktopScreenshotTranscodesHostJPEGToPNG(t *testing.T) {
+	transport := &fakeWindowsDesktopTransport{outputs: [][]byte{nil, validJPEGBytes(t)}}
+	screenshot, err := captureWindowsDesktopScreenshot(transport, "C:/maya-stall/artifacts/proof")
+	if err != nil {
+		t.Fatalf("captureWindowsDesktopScreenshot returned error: %v", err)
+	}
+	if !looksLikeImageBytes("image/png", screenshot) {
+		t.Fatalf("screenshot bytes do not contain a PNG transcoded from the Windows-host JPEG: %v", screenshot)
+	}
+	if script := strings.Join(append(transport.scripts, transport.writes...), "\n"); !strings.Contains(script, `desktop-screenshot.jpg`) || !strings.Contains(script, `ImageFormat]::Jpeg`) {
+		t.Fatalf("desktop screenshot host script does not capture JPEG bytes:\n%s", script)
+	}
+}
+
+func TestWindowsDesktopScreenshotStagesLongControllerScript(t *testing.T) {
+	transport := &fakeWindowsDesktopTransport{outputs: [][]byte{nil, validJPEGBytes(t)}}
+	if _, err := captureWindowsDesktopScreenshot(transport, "C:/maya-stall/artifacts/proof"); err != nil {
+		t.Fatalf("captureWindowsDesktopScreenshot returned error: %v", err)
+	}
+	if len(transport.writes) != 1 || !strings.Contains(transport.writes[0], "desktop-screenshot-controller.ps1\n") || !strings.Contains(transport.writes[0], "MayaStallVisualEvidenceScreenshot-") {
+		t.Fatalf("desktop screenshot controller was not staged as a PowerShell file: %+v", transport.writes)
+	}
+	if len(transport.scripts) != 2 || !strings.Contains(transport.scripts[0], "New-Item -ItemType Directory") || transport.scripts[1] != `& 'C:/maya-stall/artifacts/proof/desktop-screenshot-controller.ps1'` {
+		t.Fatalf("desktop screenshot staged invocation = %+v", transport.scripts)
+	}
+}
+
+func TestWindowsDesktopScreenshotWaitsForCompletedImage(t *testing.T) {
+	script := windowsDesktopScreenshotPowerShell("C:/maya-stall/artifacts/proof")
+	if !strings.Contains(script, `$done = $out + ".done"`) || !strings.Contains(script, `Set-Content -LiteralPath ("__MAYA_STALL_SCREENSHOT_OUT__" + ".done") -Value "ok"`) {
+		t.Fatalf("desktop screenshot task must publish an explicit completion marker after saving the image:\n%s", script)
+	}
+	if !strings.Contains(script, `(Test-Path -LiteralPath $done) -and (Test-Path -LiteralPath $out)`) {
+		t.Fatalf("desktop screenshot controller must wait for the completion marker before reading the image:\n%s", script)
+	}
+}
+
+func TestSSHWindowsDesktopTransportStreamsLongPowerShellOverStdin(t *testing.T) {
+	script := windowsDesktopScreenshotPowerShell("C:/maya-stall/runs/run-123/visual-evidence/screenshot")
+	encoded := strings.Join(encodedPowerShellCommand(script), " ")
+	if len(encoded) < 8000 {
+		t.Fatalf("desktop screenshot encoded command length = %d, want proof it leaves unsafe headroom under the Windows default-shell command-line limit", len(encoded))
+	}
+	command := strings.Join(windowsPowerShellStdinCommand(), " ")
+	if !strings.Contains(command, "-Command -") || strings.Contains(command, "-EncodedCommand") {
+		t.Fatalf("SSH desktop PowerShell command must read the script from stdin: %s", command)
+	}
+}
+
+func validJPEGBytes(t *testing.T) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	pixels := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	pixels.Set(0, 0, color.RGBA{R: 255, A: 255})
+	if err := jpeg.Encode(&output, pixels, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatalf("encode JPEG fixture: %v", err)
+	}
+	return output.Bytes()
 }
 
 func TestWindowsDesktopCaptureUsesFullVirtualDesktopBounds(t *testing.T) {
@@ -104,6 +173,7 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndUser32(t *testing.T) 
 	for _, want := range []string{
 		"schtasks.exe",
 		"/IT",
+		"LIMITED",
 		"user32.dll",
 		"SetCursorPos(12, 34)",
 		"mouse_event",
@@ -115,6 +185,9 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndUser32(t *testing.T) 
 		if !strings.Contains(combined, want) {
 			t.Fatalf("desktop click command missing %q:\n%s", want, combined)
 		}
+	}
+	if strings.Contains(combined, "HIGHEST") {
+		t.Fatalf("desktop click must not require an elevated scheduled task:\n%s", combined)
 	}
 }
 

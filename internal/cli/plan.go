@@ -16,9 +16,10 @@ import (
 )
 
 type planOptions struct {
-	ScenarioName string
-	HostConfig   string
-	JSON         bool
+	ScenarioName  string
+	HostConfig    string
+	JSON          bool
+	InputBindings map[string]string
 }
 
 type scenarioPlan struct {
@@ -41,8 +42,9 @@ type planRequirements struct {
 }
 
 type planPayload struct {
+	Name        string `json:"name,omitempty"`
 	Kind        string `json:"kind"`
-	Source      string `json:"source"`
+	Source      string `json:"source,omitempty"`
 	Destination string `json:"destination"`
 	Size        int64  `json:"size"`
 	SHA256      string `json:"sha256,omitempty"`
@@ -69,7 +71,7 @@ type planHost struct {
 }
 
 func parsePlanArgs(args []string) (planOptions, error) {
-	var options planOptions
+	options := planOptions{InputBindings: make(map[string]string)}
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; arg {
 		case "--json":
@@ -80,6 +82,19 @@ func parsePlanArgs(args []string) (planOptions, error) {
 				return options, newUsageError("--host-config needs a path")
 			}
 			options.HostConfig = args[i]
+		case "--input":
+			i++
+			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "--") {
+				return options, newUsageError("--input needs name=absolute-file")
+			}
+			name, source, err := parseRuntimeInputBinding(args[i])
+			if err != nil {
+				return options, err
+			}
+			if _, exists := options.InputBindings[name]; exists {
+				return options, newUsageError("runtime input %q is bound more than once", name)
+			}
+			options.InputBindings[name] = source
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return options, newUsageError("unknown plan option %q", arg)
@@ -141,6 +156,14 @@ func buildScenarioPlan(repoDir string, options planOptions) (scenarioPlan, error
 				plan.Issues = append(plan.Issues, *issue)
 			}
 		}
+		runtimeDeclarations, runtimeErr := normalizeRuntimeInputDeclarations(rawScenario.Payload.RuntimeInputs)
+		if runtimeErr != nil {
+			plan.Issues = append(plan.Issues, planIssue{Reason: runtimeErr.Error()})
+		} else {
+			runtimePayload, runtimeIssues := inspectPlanRuntimeInputs(runtimeDeclarations, options.InputBindings)
+			plan.Payload = append(plan.Payload, runtimePayload...)
+			plan.Issues = append(plan.Issues, runtimeIssues...)
+		}
 		if remoteErr := validateScenarioRemotePaths(rawScenario); remoteErr != nil && !planHasIssueReason(plan.Issues, remoteErr.Error()) {
 			plan.Issues = append(plan.Issues, planIssue{Reason: remoteErr.Error()})
 		}
@@ -158,6 +181,9 @@ func buildScenarioPlan(repoDir string, options planOptions) (scenarioPlan, error
 			plan.Issues = append(plan.Issues, *issue)
 		}
 	}
+	runtimePayload, runtimeIssues := inspectPlanRuntimeInputs(scenario.Config.Payload.RuntimeInputs, options.InputBindings)
+	plan.Payload = append(plan.Payload, runtimePayload...)
+	plan.Issues = append(plan.Issues, runtimeIssues...)
 	if err := validateScenarioRemotePaths(scenario.Config); err != nil {
 		plan.Issues = append(plan.Issues, planIssue{Reason: err.Error()})
 	}
@@ -485,7 +511,11 @@ func printScenarioPlan(writer io.Writer, plan scenarioPlan, jsonOutput bool) {
 		_, _ = fmt.Fprintf(writer, "required-trusted-plugin-artifacts: %t\n", *required)
 	}
 	for _, item := range plan.Payload {
-		_, _ = fmt.Fprintf(writer, "payload: %s %s -> %s (%d bytes, sha256 %s) [%s]\n", planHumanText(item.Kind), planHumanText(item.Source), planHumanText(item.Destination), item.Size, planHumanText(item.SHA256), planHumanText(item.Status))
+		label := item.Source
+		if label == "" {
+			label = item.Name
+		}
+		_, _ = fmt.Fprintf(writer, "payload: %s %s -> %s (%d bytes, sha256 %s) [%s]\n", planHumanText(item.Kind), planHumanText(label), planHumanText(item.Destination), item.Size, planHumanText(item.SHA256), planHumanText(item.Status))
 	}
 	for _, profile := range plan.TargetProfiles {
 		_, _ = fmt.Fprintf(writer, "target-profile: %s (Host Pool %s) [%s]\n", planHumanText(profile.Name), planHumanText(profile.HostPool), planHumanText(planCompatibilityLabel(profile.Compatible, profile.Reasons)))

@@ -350,15 +350,17 @@ func TestLiveVisualEvidenceProofWorkflowRequiresSmokePass(t *testing.T) {
 		"TestOptInRealVisualEvidenceSmoke",
 		"TestOptInRealDesktopControlModalSmoke",
 		"TestOptInRealSSHDoctorSmoke",
+		"TestOptInRealPreRunReadinessSmoke",
 		"TestOptInRealSSHConsumingRepoSmoke",
 		"TestOptInRealSSHRunSmoke",
 		"TestOptInRealHostLockContentionAndRecoverySmoke",
 		"TestOptInRealRunScopedDesktopOpsSmoke",
-		"-count=1 -parallel=1 -timeout=20m",
+		"TestOptInRealLocalSessiondRuntimeInputSmoke",
+		"-count=1 -parallel=1 -timeout=30m",
 		"MAYA_STALL_LIVE_PROOF_ARTIFACT_ENABLED",
 		"live-visual-evidence-proof",
 		"assert-public-artifact-confidentiality.mjs",
-		"all eight individual live smoke tests must pass without skips",
+		"all nine individual live smoke tests must pass without skips",
 		"failed_missing_visual_evidence_proof_artifact",
 		"failed_visual_evidence_proof_confidentiality",
 		"failed_visual_evidence_proof_upload",
@@ -560,7 +562,7 @@ func TestLiveVisualEvidenceHostProofDoesNotDependOnViewportCapture(t *testing.T)
 
 func TestWindowsDesktopCaptureCommandsUseInteractiveDesktop(t *testing.T) {
 	screenshot := windowsDesktopScreenshotPowerShell("C:/maya-stall/artifacts/proof")
-	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Png", "schtasks.exe", "/IT", "MayaStallVisualEvidenceScreenshot"} {
+	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Jpeg", "desktop-screenshot.jpg", "schtasks.exe", "/IT", "LIMITED", "MayaStallVisualEvidenceScreenshot"} {
 		if !strings.Contains(screenshot, want) {
 			t.Fatalf("screenshot command missing %q:\n%s", want, screenshot)
 		}
@@ -570,7 +572,7 @@ func TestWindowsDesktopCaptureCommandsUseInteractiveDesktop(t *testing.T) {
 	}
 
 	recording := windowsDesktopRecordingPowerShell("C:/maya-stall/artifacts/proof", 3, 500)
-	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Jpeg", "Compress-Archive", "frame-*.jpg", "schtasks.exe", "/IT", "MayaStallVisualEvidenceRecording"} {
+	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Jpeg", "Compress-Archive", "frame-*.jpg", "schtasks.exe", "/IT", "LIMITED", "MayaStallVisualEvidenceRecording"} {
 		if !strings.Contains(recording, want) {
 			t.Fatalf("recording command missing %q:\n%s", want, recording)
 		}
@@ -593,6 +595,7 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 		"ShowDialog",
 		"schtasks.exe",
 		"/IT",
+		"LIMITED",
 		"desktop-control-modal.shown",
 		"desktop-control-modal.closed",
 		"FormBorderStyle = \"None\"",
@@ -943,7 +946,8 @@ cd %s
 }
 
 func liveSessionBrokerFixtureReady(host mayaHostConfig) error {
-	status, err := ggMayaSessiondBroker{host: host}.status()
+	broker := ggMayaSessiondBroker{host: host}
+	status, err := broker.status()
 	if err != nil {
 		return err
 	}
@@ -964,7 +968,7 @@ func liveSessionBrokerFixtureReady(host mayaHostConfig) error {
 	if err := requireConsoleMayaProcess(processes); err != nil {
 		return err
 	}
-	return nil
+	return broker.probeMayaToolReadiness()
 }
 
 func restoreLiveSessionBrokerFixtures(t *testing.T, options realSSHSmokeOptions) {
@@ -1084,7 +1088,7 @@ Set-Content -Encoding ASCII -LiteralPath $script -Value $content
 cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
 $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
 $taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
-$createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "HIGHEST", "/IT", "/F")
+$createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "LIMITED", "/IT", "/F")
 & schtasks.exe @createArgs | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "failed to create interactive desktop control modal task with schtasks.exe /IT; ensure an interactive desktop session is logged in" }
 schtasks.exe /Run /TN $taskName | Out-Null

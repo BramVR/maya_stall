@@ -4,7 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"os"
 	"os/exec"
@@ -21,18 +24,130 @@ type windowsDesktopTransport interface {
 
 type sshWindowsDesktopTransport mayaHostConfig
 
+type localWindowsDesktopTransport struct {
+	workRoot string
+}
+
 var lookPath = exec.LookPath
 
 func (transport sshWindowsDesktopTransport) RunPowerShell(script string, timeout time.Duration) ([]byte, error) {
-	return runSSHCommandOutput(mayaHostConfig(transport), encodedPowerShellCommand(script), timeout)
+	return runSSHCommandOutputWithInput(mayaHostConfig(transport), windowsPowerShellStdinCommand(), script, timeout)
+}
+
+func windowsPowerShellStdinCommand() []string {
+	return []string{"powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"}
 }
 
 func (transport sshWindowsDesktopTransport) WritePowerShellScript(remotePath string, content string, timeout time.Duration) error {
 	return writeRemotePowerShellScript(mayaHostConfig(transport), remotePath, content, timeout)
 }
 
+func (transport localWindowsDesktopTransport) RunPowerShell(script string, timeout time.Duration) ([]byte, error) {
+	if timeout <= 0 {
+		timeout = sessiondCommandTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	encoded := base64.StdEncoding.EncodeToString(utf16LEBytes(script))
+	command := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	raw, err := command.Output()
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("run local Windows PowerShell timed out after %s", timeout)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("run local Windows PowerShell: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return raw, nil
+}
+
+func utf16LEBytes(value string) []byte {
+	runes := []rune(value)
+	encoded := make([]byte, 0, len(runes)*2)
+	for _, character := range runes {
+		if character <= 0xffff {
+			encoded = append(encoded, byte(character), byte(character>>8))
+			continue
+		}
+		character -= 0x10000
+		high := uint16(0xd800 + (character >> 10))
+		low := uint16(0xdc00 + (character & 0x3ff))
+		encoded = append(encoded, byte(high), byte(high>>8), byte(low), byte(low>>8))
+	}
+	return encoded
+}
+
+func (transport localWindowsDesktopTransport) WritePowerShellScript(path string, content string, _ time.Duration) error {
+	localPath := filepath.FromSlash(path)
+	if err := requireLocalWindowsPathWithin(filepath.FromSlash(remoteJoin(transport.workRoot, "runs")), localPath); err != nil {
+		return err
+	}
+	if err := rejectLocalWindowsReparseAncestors(localPath); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(localPath, []byte(content), 0o644)
+}
+
 func captureWindowsDesktopScreenshot(transport windowsDesktopTransport, remoteRoot string) ([]byte, error) {
-	return transport.RunPowerShell(windowsDesktopScreenshotPowerShell(remoteRoot), sessiondCommandTimeout)
+	if _, err := transport.RunPowerShell(fmt.Sprintf("New-Item -ItemType Directory -Force -Path %s | Out-Null", powerShellSingleQuoted(remoteRoot)), sessiondCommandTimeout); err != nil {
+		return nil, err
+	}
+	scriptPath := remoteJoin(remoteRoot, "desktop-screenshot-controller.ps1")
+	if err := transport.WritePowerShellScript(scriptPath, windowsDesktopScreenshotPowerShell(remoteRoot), sessiondCommandTimeout); err != nil {
+		return nil, err
+	}
+	data, err := transport.RunPowerShell(fmt.Sprintf("& %s", powerShellSingleQuoted(scriptPath)), sessiondCommandTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("windows desktop screenshot capture returned no image bytes")
+	}
+	image, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode Windows desktop screenshot JPEG: %w", err)
+	}
+	var output bytes.Buffer
+	if err := png.Encode(&output, image); err != nil {
+		return nil, fmt.Errorf("encode Windows desktop screenshot PNG: %w", err)
+	}
+	return output.Bytes(), nil
+}
+
+func captureLocalWindowsDesktopScreenshot(transport windowsDesktopTransport) ([]byte, error) {
+	data, err := transport.RunPowerShell(localWindowsDesktopScreenshotPowerShell(), sessiondCommandTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("local Windows desktop screenshot capture returned no image bytes")
+	}
+	return data, nil
+}
+
+func localWindowsDesktopScreenshotPowerShell() string {
+	return `$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw "interactive desktop session is unavailable for screenshot capture" }
+$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$stream = New-Object IO.MemoryStream
+try {
+  $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+  $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+  $data = $stream.ToArray()
+  [Console]::OpenStandardOutput().Write($data, 0, $data.Length)
+} finally {
+  $stream.Dispose()
+  $graphics.Dispose()
+  $bitmap.Dispose()
+}`
 }
 
 func clickWindowsDesktop(transport windowsDesktopTransport, remoteRoot string, x int, y int) error {
@@ -147,7 +262,8 @@ $root = %s
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) { throw "schtasks.exe is required for interactive desktop capture" }
 $taskName = "MayaStallVisualEvidenceScreenshot-" + [Guid]::NewGuid().ToString("N")
-$out = Join-Path $root "desktop-screenshot.png"
+$out = Join-Path $root "desktop-screenshot.jpg"
+$done = $out + ".done"
 $script = Join-Path $root ($taskName + ".ps1")
 $template = @'
 $ErrorActionPreference = "Stop"
@@ -162,21 +278,22 @@ if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw "interactive desktop s
 $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-$bitmap.Save("__MAYA_STALL_SCREENSHOT_OUT__", [System.Drawing.Imaging.ImageFormat]::Png)
+$bitmap.Save("__MAYA_STALL_SCREENSHOT_OUT__", [System.Drawing.Imaging.ImageFormat]::Jpeg)
 $graphics.Dispose()
 $bitmap.Dispose()
+Set-Content -LiteralPath ("__MAYA_STALL_SCREENSHOT_OUT__" + ".done") -Value "ok"
 '@
 try {
   $template.Replace("__MAYA_STALL_SCREENSHOT_OUT__", $out.Replace("\", "\\")) | Set-Content -Encoding ASCII -LiteralPath $script
   cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
   $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
   $taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
-  $createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "HIGHEST", "/IT", "/F")
+  $createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "LIMITED", "/IT", "/F")
   & schtasks.exe @createArgs | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "failed to create interactive desktop screenshot task with schtasks.exe /IT; ensure an interactive desktop session is logged in" }
   schtasks.exe /Run /TN $taskName | Out-Null
   for ($i = 0; $i -lt 40; $i++) {
-    if (Test-Path -LiteralPath $out) {
+    if ((Test-Path -LiteralPath $done) -and (Test-Path -LiteralPath $out) -and (Get-Item -LiteralPath $out).Length -gt 0) {
       try {
         $stream = [IO.File]::Open($out, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         try {
@@ -235,7 +352,7 @@ try {
   cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
   $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
   $taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
-  $createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "HIGHEST", "/IT", "/F")
+  $createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "LIMITED", "/IT", "/F")
   & schtasks.exe @createArgs | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "failed to create interactive desktop click task with schtasks.exe /IT; ensure an interactive desktop session is logged in" }
   schtasks.exe /Run /TN $taskName | Out-Null
@@ -300,7 +417,7 @@ try {
   cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
   $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
   $taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
-  $createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "HIGHEST", "/IT", "/F")
+  $createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "LIMITED", "/IT", "/F")
   & schtasks.exe @createArgs | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "failed to create interactive desktop recording task with schtasks.exe /IT; ensure an interactive desktop session is logged in" }
   schtasks.exe /Run /TN $taskName | Out-Null

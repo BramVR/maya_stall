@@ -991,6 +991,15 @@ func TestGGMayaSessiondFreshSessionReadinessRequiresRunningStatus(t *testing.T) 
 	}
 }
 
+func TestFreshRunAwareFakeSSHPreludeHandlesSceneInfoReadinessProbe(t *testing.T) {
+	prelude := freshRunAwareFakeSSHPrelude(t.TempDir(), "fake-ssh", "", "", true)
+	for _, expected := range []string{"scene.info", `{"ok":true,"tool":"scene.info"}`, "viewport.capture", `"mimeType":"image/jpeg"`} {
+		if !strings.Contains(prelude, expected) {
+			t.Fatalf("fake SSH readiness prelude missing %q", expected)
+		}
+	}
+}
+
 func TestKnownSessiondScriptExecuteResponseErrors(t *testing.T) {
 	for _, message := range []string{
 		"Error calling tool 'script.execute': 'int' object has no attribute 'get'",

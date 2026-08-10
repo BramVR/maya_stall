@@ -30,6 +30,7 @@ type hostRuntime struct {
 	renew         func() error
 	markActive    func(string) error
 	markKept      func(string) error
+	bindSession   func(string) error
 }
 
 type hostValidationError struct {
@@ -41,10 +42,11 @@ func (err *hostValidationError) Error() string { return err.err.Error() }
 func (err *hostValidationError) Unwrap() error { return err.err }
 
 type runHostLock struct {
-	release    func() error
-	renew      func() error
-	markActive func(string) error
-	markKept   func(string) error
+	release     func() error
+	renew       func() error
+	markActive  func(string) error
+	markKept    func(string) error
+	bindSession func(string) error
 }
 
 type hostLockOwner struct {
@@ -58,6 +60,7 @@ type hostLockOwner struct {
 	BrokerStateDir string
 	BrokerPython   string
 	BrokerRepo     string
+	BrokerSession  string
 	Authoritative  bool
 	LeaseExpired   bool
 	HostClockLease bool
@@ -115,6 +118,22 @@ func (lock *hostSideLock) markKept(hostID string, runID string) error {
 	return nil
 }
 
+func (lock *hostSideLock) bindSession(hostID string, sessionID string) error {
+	lock.mu.Lock()
+	defer lock.mu.Unlock()
+	if strings.TrimSpace(sessionID) == "" || strings.ContainsAny(sessionID, "\x00\r\n") {
+		return fmt.Errorf("broker session id is invalid")
+	}
+	owner := parseHostLockOwner(lock.expected)
+	owner.BrokerSession = sessionID
+	content := hostSideLockOwnerContent(hostID, owner, owner.ActiveRun, owner.KeptRun, owner.KeptRun == "")
+	if err := lock.replaceOwner(lock.expected, content); err != nil {
+		return err
+	}
+	lock.expected = content
+	return nil
+}
+
 type resolvedRuntime struct {
 	Host     runHost
 	Broker   sessionBroker
@@ -165,6 +184,9 @@ type brokerConfig struct {
 	Python       string `yaml:"python"`
 	Repo         string `yaml:"repo"`
 	MCPSource    string `yaml:"mcpSource"`
+	MCPPython    string `yaml:"mcpPython"`
+	MayaExe      string `yaml:"mayaExe"`
+	Port         int    `yaml:"port"`
 	RecoveryTask string `yaml:"recoveryTask"`
 }
 
@@ -182,6 +204,9 @@ func (config *brokerConfig) UnmarshalYAML(value *yaml.Node) error {
 		Python       string `yaml:"python"`
 		Repo         string `yaml:"repo"`
 		MCPSource    string `yaml:"mcpSource"`
+		MCPPython    string `yaml:"mcpPython"`
+		MayaExe      string `yaml:"mayaExe"`
+		Port         int    `yaml:"port"`
 		RecoveryTask string `yaml:"recoveryTask"`
 	}
 	if err := value.Decode(&decoded); err != nil {
@@ -194,6 +219,9 @@ func (config *brokerConfig) UnmarshalYAML(value *yaml.Node) error {
 		Python:       decoded.Python,
 		Repo:         decoded.Repo,
 		MCPSource:    decoded.MCPSource,
+		MCPPython:    decoded.MCPPython,
+		MayaExe:      decoded.MayaExe,
+		Port:         decoded.Port,
 		RecoveryTask: decoded.RecoveryTask,
 	}
 	return nil
@@ -285,6 +313,9 @@ var brokerConfigYAMLFields = map[string]struct{}{
 	"python":       {},
 	"repo":         {},
 	"mcpSource":    {},
+	"mcpPython":    {},
+	"mayaExe":      {},
+	"port":         {},
 	"recoveryTask": {},
 }
 
@@ -432,6 +463,7 @@ func selectHostForRunValidated(repoDir string, options runOptions, validate func
 				renew:         lock.renew,
 				markActive:    lock.markActive,
 				markKept:      lock.markKept,
+				bindSession:   lock.bindSession,
 			}, nil
 		}
 
@@ -532,7 +564,34 @@ func (host mayaHostConfig) usesRealSSH() bool {
 	return strings.EqualFold(strings.TrimSpace(host.Transport), "ssh") || host.SSH.Host != ""
 }
 
+func (host mayaHostConfig) usesLocalWindows() bool {
+	return strings.EqualFold(strings.TrimSpace(host.Transport), "local")
+}
+
 func resolveRuntimeForHost(host mayaHostConfig) (resolvedRuntime, error) {
+	if host.usesLocalWindows() {
+		if !host.Broker.isGGMayaSessiond() {
+			if reason := host.Broker.invalidReason(); reason != "" {
+				return resolvedRuntime{}, fmt.Errorf("%s", reason)
+			}
+			return resolvedRuntime{}, fmt.Errorf("local Windows Maya Host requires broker.type: gg-mayasessiond")
+		}
+		broker := ggMayaSessiondBroker{host: host}
+		if err := broker.validate(); err != nil {
+			return resolvedRuntime{}, err
+		}
+		return resolvedRuntime{
+			Host:   localWindowsHost{host: host},
+			Broker: broker,
+			Metadata: runtimeMetadata{
+				Profile:            "local-sessiond",
+				HostAdapter:        "local-windows",
+				BrokerAdapter:      "gg-mayasessiond",
+				BrokerConfigSource: "host config transport=local broker.type=gg-mayasessiond",
+				LiveProofEligible:  true,
+			},
+		}, nil
+	}
 	if host.usesRealSSH() {
 		if !host.Broker.isGGMayaSessiond() {
 			if reason := host.Broker.invalidReason(); reason != "" {
@@ -555,6 +614,9 @@ func resolveRuntimeForHost(host mayaHostConfig) (resolvedRuntime, error) {
 				LiveProofEligible:  true,
 			},
 		}, nil
+	}
+	if transport := strings.TrimSpace(host.Transport); transport != "" {
+		return resolvedRuntime{}, fmt.Errorf("unknown Maya Host transport %q", transport)
 	}
 
 	if host.Broker.isGGMayaSessiond() {
@@ -648,6 +710,9 @@ func acquireRunHostLock(repoDir string, host mayaHostConfig) (runHostLock, bool,
 			ownedRunID = runID
 			return nil
 		},
+		bindSession: func(sessionID string) error {
+			return hostSideLock.bindSession(host.ID, sessionID)
+		},
 	}, false, nil
 }
 
@@ -656,6 +721,13 @@ func fakeHostSideLockDir(host mayaHostConfig) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(host.WorkRoot, "state", "locks", "hosts"), true
+}
+
+func localHostSideLockID(host mayaHostConfig) string {
+	if host.usesLocalWindows() {
+		return "host"
+	}
+	return host.ID
 }
 
 func fakeSSHHostSideLockDir(host mayaHostConfig) (string, bool) {
@@ -681,7 +753,7 @@ func releaseHostSideLock(host mayaHostConfig, runID string) error {
 		return removeRemoteHostLockForRun(host, runID)
 	}
 	if lockDir, ok := fakeHostSideLockDir(host); ok {
-		return removeHostSideLockForRunAtDir(lockDir, host.ID, runID)
+		return removeHostSideLockForRunAtDir(lockDir, localHostSideLockID(host), runID)
 	}
 	return nil
 }
@@ -694,7 +766,7 @@ func verifyHostSideLockForRun(host mayaHostConfig, runID string) error {
 		return verifyRemoteHostLockForRun(host, runID)
 	}
 	if lockDir, ok := fakeHostSideLockDir(host); ok {
-		return verifyHostSideLockForRunAtDir(lockDir, host.ID, runID, false, false)
+		return verifyHostSideLockForRunAtDir(lockDir, localHostSideLockID(host), runID, false, false)
 	}
 	return nil
 }
@@ -707,7 +779,7 @@ func verifyCleanupHostSideLockForRun(host mayaHostConfig, runID string) error {
 		return verifyCleanupRemoteHostLockForRun(host, runID)
 	}
 	if lockDir, ok := fakeHostSideLockDir(host); ok {
-		return verifyHostSideLockForRunAtDir(lockDir, host.ID, runID, false, true)
+		return verifyHostSideLockForRunAtDir(lockDir, localHostSideLockID(host), runID, false, true)
 	}
 	return nil
 }
@@ -720,7 +792,7 @@ func verifyKeptHostSideLockForRun(host mayaHostConfig, runID string) error {
 		return verifyKeptRemoteHostLockForRun(host, runID)
 	}
 	if lockDir, ok := fakeHostSideLockDir(host); ok {
-		return verifyHostSideLockForRunAtDir(lockDir, host.ID, runID, true, false)
+		return verifyHostSideLockForRunAtDir(lockDir, localHostSideLockID(host), runID, true, false)
 	}
 	return nil
 }
@@ -771,12 +843,18 @@ func acquireHostSideLock(host mayaHostConfig) (*hostSideLock, bool, error) {
 			return nil, false, err
 		}
 		if lockDir, ok := fakeSSHHostSideLockDir(host); ok {
-			return acquireLocalHostSideLock(lockDir, "host", content)
+			return acquireLocalHostSideLock(lockDir, "host", content, isStaleHostSideLock)
 		}
 		return acquireRemoteHostLock(host, content)
 	}
 	if lockDir, ok := fakeHostSideLockDir(host); ok {
-		return acquireLocalHostSideLock(lockDir, host.ID, content)
+		isStale := isStaleHostSideLock
+		if host.usesLocalWindows() {
+			isStale = func(lockPath string) (bool, error) {
+				return isRecoverableLocalSessiondHostLock(host, lockPath)
+			}
+		}
+		return acquireLocalHostSideLock(lockDir, localHostSideLockID(host), content, isStale)
 	}
 	return &hostSideLock{
 		replaceOwner: func(string, string) error { return nil },
@@ -784,10 +862,10 @@ func acquireHostSideLock(host mayaHostConfig) (*hostSideLock, bool, error) {
 	}, false, nil
 }
 
-func acquireLocalHostSideLock(lockDir string, hostID string, content string) (*hostSideLock, bool, error) {
+func acquireLocalHostSideLock(lockDir string, hostID string, content string, isStale func(string) (bool, error)) (*hostSideLock, bool, error) {
 	var locked bool
 	err := withLocalHostSideMutex(lockDir, hostID, func() error {
-		_, acquiredLocked, acquireErr := acquireHostLockAtDirWithContent(lockDir, hostID, content, isStaleHostSideLock)
+		_, acquiredLocked, acquireErr := acquireHostLockAtDirWithContent(lockDir, hostID, content, isStale)
 		locked = acquiredLocked
 		return acquireErr
 	})
@@ -825,6 +903,30 @@ func acquireLocalHostSideLock(lockDir string, hostID string, content string) (*h
 			})
 		},
 	}, false, nil
+}
+
+func isRecoverableLocalSessiondHostLock(host mayaHostConfig, lockPath string) (bool, error) {
+	content, err := os.ReadFile(lockPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	owner := parseHostLockOwner(string(content))
+	if !isStaleHostSideOwner(owner) {
+		return false, nil
+	}
+	result := remoteHostLockResult{
+		BrokerStateDir: owner.BrokerStateDir,
+		BrokerPython:   owner.BrokerPython,
+		BrokerRepo:     owner.BrokerRepo,
+	}
+	inactive, err := remoteHostLockSessionInactive(host, result)
+	if err != nil {
+		return false, fmt.Errorf("verify expired local Host Lock Session Broker inactivity: %w", err)
+	}
+	return inactive, nil
 }
 
 func withLocalHostSideMutex(lockDir string, hostID string, action func() error) error {
@@ -1031,6 +1133,9 @@ func hostSideLockOwnerContent(hostID string, owner hostLockOwner, activeRun stri
 		owner.BrokerRepo,
 		createdAt,
 	)
+	if owner.BrokerSession != "" {
+		content += "brokerSessionId: " + owner.BrokerSession + "\n"
+	}
 	if activeRun != "" {
 		content += "activeRun: " + activeRun + "\n"
 	}
@@ -1072,6 +1177,8 @@ func parseHostLockOwner(content string) hostLockOwner {
 			owner.BrokerPython = value
 		case "brokerRepo":
 			owner.BrokerRepo = value
+		case "brokerSessionId":
+			owner.BrokerSession = value
 		case "authoritativeHostLock":
 			owner.Authoritative = strings.EqualFold(value, "true")
 		}

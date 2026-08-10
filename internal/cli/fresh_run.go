@@ -392,6 +392,15 @@ func (run *freshRunLifecycle) setup() error {
 	if err := run.configureScenarioWorkspace(scenario, configPath); err != nil {
 		return err
 	}
+	runtimePayload, err := snapshotDeclaredRuntimeInputs(run.context, scenario.Config.Payload.RuntimeInputs, run.options.InputBindings, run.runtime.BeforeRuntimeInputCopy)
+	if err != nil {
+		return err
+	}
+	run.scenario.Payload = append(run.scenario.Payload, runtimePayload...)
+	run.manifest.Payload = append([]manifestPayload(nil), run.scenario.Payload...)
+	if err := run.writeManifest(); err != nil {
+		return err
+	}
 	var resolved resolvedRuntime
 	run.failedLayer = failureLayerHostSelection
 	sweepRepoDirs, sweepRepoWarnings := keptSessionSweepRepoDirs(run.repoDir, run.options.KeptSessionRepoRoot)
@@ -453,6 +462,9 @@ func (run *freshRunLifecycle) setup() error {
 	run.context.RunWorkspace = workspace
 	run.context.ScenarioResultPath = workspace.LocalScenarioResultPath()
 	run.context.Environment[scenarioResultEnvVar] = workspace.LocalScenarioResultPath()
+	if err := configureRuntimeInputEnvironment(run.context, run.scenario.Payload, resolved.Metadata.HostAdapter == "fake"); err != nil {
+		return err
+	}
 	if err := run.writeManifest(); err != nil {
 		return err
 	}
@@ -489,7 +501,10 @@ func (run *freshRunLifecycle) setup() error {
 	run.failedLayer = failureLayerScenario
 	// Freeze the payload before TrustCenter preflight so the checked paths are
 	// the exact bytes later staged to the Maya Host.
-	if err := snapshotRunPayload(run.context, scenario.Payload); err != nil {
+	if err := snapshotRunPayload(run.context, run.scenario.Payload); err != nil {
+		return err
+	}
+	if err := validatePayloadSnapshotForStage(run.context, run.scenario.Payload); err != nil {
 		return err
 	}
 	run.failedLayer = failureLayerRemoteCheck
@@ -520,7 +535,7 @@ func (run *freshRunLifecycle) setup() error {
 	if err := run.renewHostLockNow(); err != nil {
 		return err
 	}
-	if err := run.stagePayloadWithCancellation(scenario.Payload); err != nil {
+	if err := run.stagePayloadWithCancellation(run.scenario.Payload); err != nil {
 		return err
 	}
 	return run.cancellationError()
@@ -972,6 +987,11 @@ func (run *freshRunLifecycle) startFreshSession() error {
 		}
 		if recordErr != nil {
 			return errors.Join(err, fmt.Errorf("record owned Maya UI Session for %s: %w", run.manifest.RunID, recordErr))
+		}
+		if run.host.bindSession != nil {
+			if bindErr := run.host.bindSession(session.SessionID); bindErr != nil {
+				return errors.Join(err, fmt.Errorf("bind Maya UI Session ownership for %s: %w", run.manifest.RunID, bindErr))
+			}
 		}
 		if run.runtime.SessionStarted != nil {
 			if bindErr := run.runtime.SessionStarted(session); bindErr != nil {

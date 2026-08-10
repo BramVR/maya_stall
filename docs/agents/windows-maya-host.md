@@ -59,6 +59,28 @@ C:\maya-stall\sessiond-venv311\Scripts\python.exe -m gg_maya_sessiond.cli start 
 
 Use this only as the current development fixture. The product implementation should model this as Session Broker behavior and keep host-specific paths configurable.
 
+## Local Workstation Runtime
+
+For a user already logged into the same Windows workstation as Maya, use the
+`local-sessiond` Embedded Mode runtime instead of SSH. Host config declares
+`transport: local`, one authoritative work root, a unique Sessiond state
+directory and port, Sessiond/MayaMCP source and Python paths, and the Maya
+executable. Do not set SSH fields or `broker.recoveryTask`.
+
+The `maya-stall` process must itself run in the logged-in Windows session. It
+invokes `gg_maya_sessiond.cli` directly, moves only Run-owned files through the
+local filesystem, binds the fresh Sessiond session ID into the Host Lock, and
+stops only that exact ID. The adapter does not use SSH, SFTP, scheduled remote
+recovery, Control Plane, or Windows Host Agent. A protected controller may use
+a one-shot `/IT /RL LIMITED` task only to place the candidate CLI in that
+logged-in session; this is test control, not a local adapter lifecycle path.
+
+Before live proof, record existing Maya/MayaMCP processes and treat them as
+unowned unless their exact Sessiond state and Host Lock prove otherwise. Use a
+unique state directory, port, and work root. Afterward require Sessiond
+`stopped`, no listener, no Run workspace or Host Lock, source-file hash
+immutability, and no owned Maya process.
+
 ## Quick Checks
 
 SSH:

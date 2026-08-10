@@ -105,8 +105,12 @@ The cleanup rule that decides whether Maya Stall stops or keeps a Maya UI Sessio
 _Avoid_: Cleanup when only the run-retention rule is meant
 
 **Run Payload**:
-The repo-owned tests, scripts, scenes, expected outputs, and build artifacts that a consuming repo gives Maya Stall to execute.
+The immutable, hashed tests, scripts, scenes, expected outputs, build artifacts, and admitted Runtime Input snapshots that a consuming repo gives Maya Stall to execute.
 _Avoid_: Test bundle unless packaging is specifically meant
+
+**Runtime Input**:
+A required named file slot declared by a Scenario, bound by a user to one absolute local file, then validated and converted into an immutable hashed Run Payload snapshot before Maya starts.
+_Avoid_: Arbitrary payload path, folder input, script, credential
 
 **Plugin Artifact**:
 A built Maya plugin file or related loadable binary supplied by a consuming repo.

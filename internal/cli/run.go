@@ -24,6 +24,7 @@ const resultStatusPassed = "passed"
 const resultStatusFailed = "failed"
 const scenarioResultEnvVar = "MAYA_STALL_SCENARIO_RESULT"
 const trustedPluginArtifactsRootEnvVar = "MAYA_STALL_TRUSTED_PLUGIN_ARTIFACTS_ROOT"
+const runtimeInputsEnvVar = "MAYA_STALL_RUNTIME_INPUTS"
 const stopAfterSuccess = "success"
 const stopAfterFailure = "failure"
 const stopAfterAlways = "always"
@@ -43,6 +44,7 @@ type runRuntime struct {
 	ControlPlaneServe      func(controlPlaneServeOptions, http.Handler) error
 	Cancel                 <-chan error
 	CancelWait             time.Duration
+	BeforeRuntimeInputCopy func(string, string)
 }
 
 type runHost interface {
@@ -166,9 +168,19 @@ type runManifest struct {
 }
 
 type manifestPayload struct {
+	Name   string `json:"name,omitempty"`
 	Kind   string `json:"kind"`
-	Source string `json:"source"`
+	Source string `json:"source,omitempty"`
 	Staged string `json:"staged"`
+	Size   int64  `json:"size,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
+}
+
+func (item manifestPayload) stageLabel() string {
+	if item.Name != "" {
+		return item.Name
+	}
+	return item.Source
 }
 
 type manifestPayloadDeclaration struct {
@@ -342,6 +354,9 @@ func createCleanRunDirsWithOwnership(context runContext) (runDirOwnership, error
 
 func snapshotRunPayload(context runContext, payload []manifestPayload) error {
 	for _, item := range payload {
+		if strings.HasPrefix(item.Kind, "runtimeInput:") {
+			continue
+		}
 		if err := rejectSFTPRepoPath(item.Source); err != nil {
 			return fmt.Errorf("snapshot %s payload: %w", item.Kind, err)
 		}
@@ -358,6 +373,9 @@ func snapshotRunPayload(context runContext, payload []manifestPayload) error {
 	})
 	copiedRoots := make(map[string][]string)
 	for _, item := range snapshotPayload {
+		if strings.HasPrefix(item.Kind, "runtimeInput:") {
+			continue
+		}
 		covered := false
 		for _, root := range copiedRoots[item.Kind] {
 			if item.Source == root || strings.HasPrefix(item.Source, root+"/") {

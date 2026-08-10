@@ -1209,6 +1209,9 @@ func runScenarioThroughMode(repoDir string, options runOptions, runtime runRunti
 		}
 		return runScenario(repoDir, options, runtime)
 	}
+	if len(options.InputBindings) > 0 {
+		return runOutcome{}, newUsageError("--input is available only for Embedded Mode runs; omit --control-plane")
+	}
 	return submitControlPlaneScenario(repoDir, options, runtime)
 }
 
