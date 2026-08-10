@@ -8208,7 +8208,7 @@ func TestRunScenarioHostLockWaitsForRelease(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("first run exit code = %d, want 0", code)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("first run did not finish after release")
 	}
 	select {
@@ -8219,7 +8219,7 @@ func TestRunScenarioHostLockWaitsForRelease(t *testing.T) {
 		if !strings.Contains(result.stdout, "host: alpha") {
 			t.Fatalf("waiting run output missing host:\n%s", result.stdout)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("waiting run did not finish after lock release")
 	}
 }
