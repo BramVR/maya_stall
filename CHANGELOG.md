@@ -6,6 +6,7 @@ Release history starts with `v0.1.0`.
 
 ## Unreleased
 
+- Added declared runtime file inputs and the Embedded Mode `local-sessiond` Windows runtime: `plan` and `run` accept repeated `--input name=absolute-file`, snapshot allowlisted files without exposing source paths in evidence, and execute through a directly invoked local `gg_mayasessiond` lifecycle with authoritative cross-checkout locking and exact-session cleanup: https://github.com/BramVR/maya_stall/issues/165.
 - Renamed the repository and Go module from `BramVR/gg_maya_stall` to `BramVR/maya_stall`, with canonical badges, docs, examples, and release commands.
 - Added a required Windows CI job that runs the full Go suite on `windows-latest` and gates it against a recorded known-failure list, so Windows regressions fail closed; the list is fail-closed in both directions and rejects an incomplete run, so it can only shrink.
 - Fixed the declared Go version so hosts running an older toolchain can still build: the bare `go 1.25` directive resolved to a toolchain name that does not exist and failed with `toolchain not available`.

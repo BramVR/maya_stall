@@ -25,6 +25,9 @@ descriptive; code is the source-backed check when behavior claims disagree.
 - Scenario Result model and optional Python helper behavior:
   `helpers/python/maya_stall/__init__.py`,
   `helpers/python/tests/test_maya_stall_result.py`
+- Runtime Input normalization, binding, path safety, hashing, immutable
+  snapshots, and Scenario environment mapping: `internal/cli/runtime_inputs.go`,
+  `internal/cli/scenario.go`
 
 ## Host Selection And Transport
 
@@ -34,6 +37,9 @@ descriptive; code is the source-backed check when behavior claims disagree.
 - Host Pool selection and Host Locks: `internal/cli/host_pool.go`
 - Real SSH and SFTP transport, PowerShell wrapping, upload/download behavior,
   and fixed SSH/SFTP command timeouts: `internal/cli/ssh_transport.go`
+- Local Windows filesystem transport and direct desktop integration:
+  `internal/cli/local_windows_host.go`,
+  `internal/cli/windows_desktop_capture.go`
 - Windows Maya Host prepare script and fake/check-only fixture tests:
   `scripts/windows/prepare-maya-host.ps1`,
   `scripts/windows/prepare-maya-host.test.mjs`

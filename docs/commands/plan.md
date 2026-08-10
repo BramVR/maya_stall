@@ -6,6 +6,7 @@
 maya-stall plan smoke
 maya-stall plan --json smoke
 maya-stall plan --host-config ci-hosts.yaml smoke
+maya-stall plan --input scene=C:\scenes\character.ma local-smoke
 ```
 
 ## Behavior
@@ -20,6 +21,24 @@ For a directory declaration, `size` is the sum of regular-file bytes. Its hash
 is a deterministic tree digest over each sorted repo-relative file path, a NUL
 separator, the decimal byte size, another NUL separator, and the file bytes.
 Path changes and content changes therefore both change the digest.
+
+A Scenario may declare required named file slots under
+`payload.runtimeInputs`. Bind each slot with a repeated
+`--input name=absolute-file`. Planning validates one regular non-symlink,
+non-reparse-point file, its allowlisted extension, size, and SHA-256. The
+runtime entry reports its name, `runtimeInput:file` kind, deterministic
+`payload/runtimeInputs/<destination>` path, size, hash, and status. It never
+reports the user's absolute source path. Directories, implicit sibling files,
+scripts, credentials, undeclared bindings, and duplicate bindings fail closed.
+
+```yaml
+payload:
+  runtimeInputs:
+    scene:
+      kind: file
+      extensions: [.ma, .mb]
+      destination: scenes/input.ma
+```
 
 Requirements include exact or minimum Maya, Python, and Session Broker
 versions; required Session Broker, capture, control, renderer, GPU, display,
@@ -76,8 +95,9 @@ explicit in human output.
 - `version`, `kind`, `scenario`, `configPath`, and `ready`;
 - `requirements`, including normalized `hostCapabilities` exact/minimum and
   feature requirements;
-- `payload` entries with `kind`, `source`, `destination`, `size`, `sha256`, and
-  `status`;
+- `payload` entries with `name` when declared, `kind`, optional repo-owned
+  `source`, `destination`, `size`, `sha256`, and `status`; Runtime Inputs omit
+  the private absolute source;
 - `issues` with source-specific reasons;
 - `targetProfiles`, containing Host Pool and Maya Host compatibility.
 

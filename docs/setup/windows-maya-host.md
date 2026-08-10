@@ -328,7 +328,34 @@ recovers commandPort health before a live Scenario starts. A `stopped` Stop
 Policy stops that exact Maya UI Session; a `kept` policy retains its identity
 for `status`, `attach`, and `stop`.
 
-Maya Stall invokes `gg_maya_sessiond.cli` on the Windows host through the same SSH transport. Runs stage declared payloads under `workRoot/runs/<run-id>/`, execute a staged wrapper with `script.execute`, download declared outputs from the remote workspace, and capture configured Visual Evidence from the interactive Windows desktop. Remote Scenario execution through `script.execute` is capped at 10 minutes. The Session Broker launcher must allow the staged wrapper directory; otherwise doctor fails the `session-broker` layer with a `script.execute` repair hint.
+For a logged-in workstation where `maya-stall`, Sessiond, and Maya all run on
+the same Windows machine, configure the Host with `transport: local` instead.
+The local broker block additionally requires `mcpSource`, `mayaExe`, and a
+dedicated `port`; `mcpPython` defaults to `python`. Do not configure SSH or
+`recoveryTask`, and omit `trustedPluginArtifactsRoot` because stable trusted
+plug-in staging remains SSH-only. The CLI invokes Sessiond directly and uses local filesystem
+operations, while preserving the same Fresh Run and cleanup contracts:
+
+```yaml
+- id: local-workstation
+  transport: local
+  workRoot: C:/maya-stall-local
+  broker:
+    type: gg-mayasessiond
+    stateDir: C:/maya-stall-local/sessiond
+    python: C:/maya-stall/sessiond-venv311/Scripts/python.exe
+    repo: C:/PROJECTS/GG/GG_MayaSessiond
+    mcpSource: C:/PROJECTS/GG/GG_MayaMCP
+    mayaExe: C:/Program Files/Autodesk/Maya2025/bin/maya.exe
+    port: 7165
+```
+
+Use a state directory and port owned by this configured slot. Maya Stall never
+discovers or adopts another local Sessiond/Maya session by process name. The
+exact fresh Sessiond ID is bound to the alias-independent authoritative lock at
+`workRoot/state/locks/hosts/host.lock` before execution and rechecked before stop.
+
+For an SSH runtime, Maya Stall invokes `gg_maya_sessiond.cli` on the Windows host through the SSH transport. Runs stage declared payloads under `workRoot/runs/<run-id>/`, execute a staged wrapper with `script.execute`, download declared outputs from the remote workspace, and capture configured Visual Evidence from the interactive Windows desktop. Remote Scenario execution through `script.execute` is capped at 10 minutes. The Session Broker launcher must allow the staged wrapper directory; otherwise doctor fails the `session-broker` layer with a `script.execute` repair hint.
 
 `recoveryTask` names the host-managed interactive scheduled task Maya Stall may
 restart when `gg_mayasessiond` reports a commandPort-unhealthy state before a
@@ -344,7 +371,7 @@ Each `manifest.json` and `evidence.json` records the resolved runtime profile,
 host adapter, broker adapter, broker session identity, redacted broker config
 source, and whether the run is eligible for live product proof.
 
-`maya-stall doctor` also performs live broker probes for `gg_mayasessiond`: it runs daemon `doctor` and `status`, checks the Windows `maya.exe` session, stages a tiny probe script under `workRoot/runs/doctor-*`, executes it with `script.execute`, removes that probe directory, and checks `viewport.capture`. If the commandPort layer is unhealthy or the probe returns the known stale-session malformed tool result and the configured recovery task is available, doctor restarts that task and re-runs the broker probes before reporting success. The authoritative Host Lock at `workRoot/state/locks/host.lock` gates these probes across controllers and checkouts, but operators should still treat doctor as a live diagnostic that briefly executes code in the active Maya session.
+For SSH `gg_mayasessiond` hosts, `maya-stall doctor` also performs live broker probes: it runs daemon `doctor` and `status`, checks the Windows `maya.exe` session, stages a tiny probe script under `workRoot/runs/doctor-*`, executes it with `script.execute`, removes that probe directory, and checks `viewport.capture`. If the commandPort layer is unhealthy or the probe returns the known stale-session malformed tool result and the configured recovery task is available, doctor restarts that task and re-runs the broker probes before reporting success. The authoritative Host Lock at `workRoot/state/locks/host.lock` gates these probes across controllers and checkouts, but operators should still treat doctor as a live diagnostic that briefly executes code in the active Maya session.
 
 The Doctor CLI renders a Host Health report rather than independent text-only checks. Tests and live proof use the same report fields for layer status, Host Lock state, interactive desktop proof, and broker-backed Visual Evidence readiness.
 
@@ -498,7 +525,7 @@ To run the full live smoke, use:
 MAYA_STALL_SMOKE_HOST_CONFIG=/path/to/ci-hosts.yaml go test ./internal/cli -run 'TestOptInRealSSH(Doctor|Run)Smoke' -count=1
 ```
 
-`TestOptInRealPreRunReadinessSmoke` keeps real SSH reachable, points the probe at a deliberately absent broker state, and proves `run` fails at the `session-broker` layer before staging while releasing the Host Lock. `TestOptInRealSSHRunSmoke` first runs `doctor --scenario smoke`, then runs two consecutive generated `smoke` Scenarios through the configured `gg_mayasessiond` Session Broker. It requires distinct broker session identities, verifies each stopped run leaves the broker session stopped, requires screenshot and recording Visual Evidence, and checks that the local Evidence Bundle contains `evidence.json`, events, logs, Scenario Result, the captured screenshot, and an MP4 recording with duration/FPS plus selected Target Profile and Maya Host metadata. `TestOptInRealHostLockContentionAndRecoverySmoke` starts separate controller processes against one SSH Maya Host, proves cross-checkout contention, leaves an expired lease as if its controller crashed, proves the Session Broker is inactive, and recovers the lease through the real SSH/Session Broker boundary. `TestOptInRealRunScopedDesktopOpsSmoke` keeps a failed run locked, proves standalone screenshot fails closed while the Host Lock is held, captures a run-scoped desktop screenshot, and clears a controlled modal through `attach <run-id> control click`. The required `TestOptInRealSSHRunSmoke/shared Host Agent path` subtest submits through the Control Plane without client Host config, runs through a registered Agent using its operator-owned Host config, proves the shared Host Lock binds the exact real broker session before staging, then verifies transferred Visual Evidence/result/log/runtime/target data, inactive broker state, and zero Agent/remote workspace or lock residue. Live smokes restart the documented interactive `MayaStallSessiondUI` task before proof starts and after retained-stop tests, or the task named by `MAYA_STALL_SMOKE_SESSIOND_UI_TASK`.
+`TestOptInRealPreRunReadinessSmoke` keeps real SSH reachable, points the probe at a deliberately absent broker state, and proves `run` fails at the `session-broker` layer before staging while releasing the Host Lock. `TestOptInRealSSHRunSmoke` first runs `doctor --scenario smoke`, then runs two consecutive generated `smoke` Scenarios through the configured `gg_mayasessiond` Session Broker. It requires distinct broker session identities, verifies each stopped run leaves the broker session stopped, requires screenshot and recording Visual Evidence, and checks that the local Evidence Bundle contains `evidence.json`, events, logs, Scenario Result, the captured screenshot, and an MP4 recording with duration/FPS plus selected Target Profile and Maya Host metadata. `TestOptInRealHostLockContentionAndRecoverySmoke` starts separate controller processes against one SSH Maya Host, proves cross-checkout contention, leaves an expired lease as if its controller crashed, proves the Session Broker is inactive, and recovers the lease through the real SSH/Session Broker boundary. `TestOptInRealRunScopedDesktopOpsSmoke` keeps a failed run locked, proves standalone screenshot fails closed while the Host Lock is held, captures a run-scoped desktop screenshot, and clears a controlled modal through `attach <run-id> control click`. `TestOptInRealLocalSessiondRuntimeInputSmoke` cross-builds the candidate for Windows, runs it in the logged-in desktop, and requires local Sessiond execution, declared input immutability, exact session locking, evidence, cleanup, and zero residue. The required `TestOptInRealSSHRunSmoke/shared Host Agent path` subtest submits through the Control Plane without client Host config, runs through a registered Agent using its operator-owned Host config, proves the shared Host Lock binds the exact real broker session before staging, then verifies transferred Visual Evidence/result/log/runtime/target data, inactive broker state, and zero Agent/remote workspace or lock residue. Live smokes restart the documented interactive `MayaStallSessiondUI` task before proof starts and after retained-stop tests, or the task named by `MAYA_STALL_SMOKE_SESSIOND_UI_TASK`.
 
 To include the canonical Consuming Repo smoke, add a checked-out consuming repo path and run:
 

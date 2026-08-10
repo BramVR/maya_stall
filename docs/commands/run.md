@@ -16,6 +16,7 @@ maya-stall run --stop-after failure smoke
 maya-stall run --stop-after always smoke
 maya-stall run --stop-after never smoke
 maya-stall run --control-plane https://maya-stall.example.com smoke
+maya-stall run --host-config local-hosts.yaml --target-profile workstation --input scene=C:\scenes\character.ma local-smoke
 ```
 
 ## Operating Mode
@@ -41,6 +42,10 @@ by Run ID and inclusive event sequence while an in-process fake or registered
 Windows Host Agent Scenario is running. Configured stop and run-scoped desktop
 mutations remain unavailable after assignment; `stop --control-plane` can
 cancel a Run while it is still queued.
+
+Runtime Input bindings are currently Embedded Mode only. A run that combines
+`--input` with `--control-plane` is rejected instead of silently dropping the
+binding.
 
 When registered Agents exist, the Control Plane matches the normalized Scenario
 requirements against fresh Agent capability reports before assignment, Host
@@ -84,28 +89,66 @@ execute, and settle flow:
 1. Accept the identified Scenario submission and create its Run ID and Run State.
 2. Load Repo Run Config.
 3. Select and normalize the named Scenario.
-4. Resolve Target Profile, Host Pool, and Maya Host from host config if
+4. Validate and snapshot each declared Runtime Input into the local Run Payload.
+5. Resolve Target Profile, Host Pool, and Maya Host from host config if
    provided.
-5. Resolve the Host/Broker runtime contract.
-6. Opportunistically expire overdue Kept Sessions recorded for each candidate Maya Host, then acquire a Host Lock.
-7. Run bounded live SSH and Session Broker status probes; release the Host Lock and fail at the named layer if either is unavailable.
-8. Ask the Session Broker to stop any inherited Maya UI Session and start a new identified Maya UI Session.
-9. Stage only declared Run Payload paths.
-10. Provide `MAYA_STALL_SCENARIO_RESULT` to the Scenario.
-11. Run through the resolved fake-local or ssh-sessiond runtime.
-12. Collect outputs, logs, runtime metadata, broker session identity, Scenario Result, and Visual Evidence into an
+6. Resolve the Host/Broker runtime contract.
+7. Opportunistically expire overdue Kept Sessions recorded for each candidate Maya Host, then acquire a Host Lock.
+8. Run bounded transport and Session Broker status probes; release the Host Lock and fail at the named layer if either is unavailable.
+9. Ask the Session Broker to stop any inherited Maya UI Session and start a new identified Maya UI Session.
+10. Bind that exact Sessiond session ID to the authoritative Host Lock.
+11. Verify and stage only declared Run Payload paths.
+12. Provide `MAYA_STALL_SCENARIO_RESULT` and `MAYA_STALL_RUNTIME_INPUTS` to the Scenario.
+13. Run through the resolved fake-local, local-sessiond, or ssh-sessiond runtime.
+14. Collect outputs, logs, runtime metadata, broker session identity, Scenario Result, and Visual Evidence into an
    Evidence Bundle.
-13. Run Validators.
-14. Apply the Stop Policy to that Maya UI Session and release or retain the Host Lock.
+15. Run Validators.
+16. Apply the Stop Policy to that Maya UI Session and release or retain the Host Lock.
 
 Supported runtime profiles:
 
 - `fake-local`: fake Maya Host with the fake Session Broker.
+- `local-sessiond`: logged-in Windows workstation with direct local
+  `gg_mayasessiond` process invocation and local filesystem staging.
 - `ssh-sessiond`: SSH Windows Maya Host with `broker.type: gg-mayasessiond`.
 
 An SSH Maya Host without structured `gg_mayasessiond` broker config fails before
 payload staging. SSH Host plus fake broker, fake Host plus real broker, and
 malformed broker config are not silently downgraded.
+
+For a local runtime, set `transport: local` and configure `workRoot` plus the
+exact Sessiond state directory, Python, source checkout, MayaMCP checkout, Maya
+executable, and port. Do not configure SSH, `broker.recoveryTask`, or
+`trustedPluginArtifactsRoot`; stable trusted plug-in staging remains SSH-only. The local
+adapter starts, observes, calls, and stops Sessiond directly; stages and
+collects via the local filesystem; and captures the logged-in desktop without
+SSH, SFTP, a remote recovery task, Control Plane, or Host Agent. All Consuming
+Repo checkouts using the same work root contend on the alias-independent
+`workRoot/state/locks/hosts/host.lock`.
+
+```yaml
+hosts:
+  - id: local-workstation
+    transport: local
+    workRoot: C:/maya-stall-local
+    broker:
+      type: gg-mayasessiond
+      stateDir: C:/maya-stall-local/sessiond
+      python: C:/maya-stall/sessiond-venv311/Scripts/python.exe
+      repo: C:/src/GG_MayaSessiond
+      mcpSource: C:/src/GG_MayaMCP
+      mcpPython: C:/maya-stall/sessiond-venv311/Scripts/python.exe
+      mayaExe: C:/Program Files/Autodesk/Maya2025/bin/maya.exe
+      port: 7165
+```
+
+Runtime Inputs are snapshotted before Host Lock acquisition and before Maya
+starts. Maya receives only a JSON name-to-staged-path map in
+`MAYA_STALL_RUNTIME_INPUTS`. The original file is never opened for writing;
+the manifest and Evidence Bundle record the name, kind, staged destination,
+size, and SHA-256 without the absolute source path. A source change during
+snapshotting or a staged-byte change before host staging fails before Scenario
+execution.
 
 After Run ID creation and Host Lock acquisition, but before Run Payload staging,
 `run` performs one bounded SSH reachability check and one bounded Session Broker
@@ -176,6 +219,7 @@ For each run, Maya Stall derives local and remote paths from one Run Workspace:
 - remote workspace: `workRoot/runs/<run-id>/workspace/`
 - remote Scenario Result: `workRoot/runs/<run-id>/workspace/<expectedOutputs.scenarioResult>`
 - optional trusted Plugin Artifact root: `trustedPluginArtifactsRoot/<repo-relative-plugin-path>`
+- Runtime Input snapshot: `workRoot/runs/<run-id>/payload/runtimeInputs/<declared-destination>`
 
 ## Trusted Plugin Artifacts
 
