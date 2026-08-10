@@ -43,6 +43,7 @@ func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testin
 		"System.Drawing",
 		"schtasks.exe",
 		"/IT",
+		"LIMITED",
 		"Compress-Archive",
 		"Remove-Item -Recurse -Force",
 		"interactive desktop session is logged in",
@@ -54,6 +55,9 @@ func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testin
 	}
 	if strings.Contains(combined, "viewport.capture") {
 		t.Fatalf("desktop capture must not use viewport.capture:\n%s", combined)
+	}
+	if strings.Contains(combined, "HIGHEST") {
+		t.Fatalf("desktop capture must not require an elevated scheduled task:\n%s", combined)
 	}
 }
 
@@ -104,6 +108,7 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndUser32(t *testing.T) 
 	for _, want := range []string{
 		"schtasks.exe",
 		"/IT",
+		"LIMITED",
 		"user32.dll",
 		"SetCursorPos(12, 34)",
 		"mouse_event",
@@ -115,6 +120,9 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndUser32(t *testing.T) 
 		if !strings.Contains(combined, want) {
 			t.Fatalf("desktop click command missing %q:\n%s", want, combined)
 		}
+	}
+	if strings.Contains(combined, "HIGHEST") {
+		t.Fatalf("desktop click must not require an elevated scheduled task:\n%s", combined)
 	}
 }
 

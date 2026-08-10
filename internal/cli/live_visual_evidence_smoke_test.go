@@ -562,7 +562,7 @@ func TestLiveVisualEvidenceHostProofDoesNotDependOnViewportCapture(t *testing.T)
 
 func TestWindowsDesktopCaptureCommandsUseInteractiveDesktop(t *testing.T) {
 	screenshot := windowsDesktopScreenshotPowerShell("C:/maya-stall/artifacts/proof")
-	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Png", "schtasks.exe", "/IT", "MayaStallVisualEvidenceScreenshot"} {
+	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Png", "schtasks.exe", "/IT", "LIMITED", "MayaStallVisualEvidenceScreenshot"} {
 		if !strings.Contains(screenshot, want) {
 			t.Fatalf("screenshot command missing %q:\n%s", want, screenshot)
 		}
@@ -572,7 +572,7 @@ func TestWindowsDesktopCaptureCommandsUseInteractiveDesktop(t *testing.T) {
 	}
 
 	recording := windowsDesktopRecordingPowerShell("C:/maya-stall/artifacts/proof", 3, 500)
-	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Jpeg", "Compress-Archive", "frame-*.jpg", "schtasks.exe", "/IT", "MayaStallVisualEvidenceRecording"} {
+	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Jpeg", "Compress-Archive", "frame-*.jpg", "schtasks.exe", "/IT", "LIMITED", "MayaStallVisualEvidenceRecording"} {
 		if !strings.Contains(recording, want) {
 			t.Fatalf("recording command missing %q:\n%s", want, recording)
 		}
@@ -595,6 +595,7 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 		"ShowDialog",
 		"schtasks.exe",
 		"/IT",
+		"LIMITED",
 		"desktop-control-modal.shown",
 		"desktop-control-modal.closed",
 		"FormBorderStyle = \"None\"",
@@ -1087,7 +1088,7 @@ Set-Content -Encoding ASCII -LiteralPath $script -Value $content
 cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
 $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
 $taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
-$createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "HIGHEST", "/IT", "/F")
+$createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "LIMITED", "/IT", "/F")
 & schtasks.exe @createArgs | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "failed to create interactive desktop control modal task with schtasks.exe /IT; ensure an interactive desktop session is logged in" }
 schtasks.exe /Run /TN $taskName | Out-Null

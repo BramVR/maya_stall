@@ -561,7 +561,9 @@ Optional:
 - Creating Windows users, auto-logon, or service wrappers.
 - Creating long-lived scheduled tasks other than the prepare script's
   interactive `MayaStallSessiondUI` task. Visual Evidence and desktop control
-  commands may create short-lived `/IT` tasks and remove them after the action.
+  commands may create short-lived `/IT /RL LIMITED` tasks and remove them after
+  the action. Those user-desktop actions must not require an elevated Task
+  Scheduler token.
 - Storing host credentials, private hostnames, SSH identities, or license data.
 - Installing `gg_mayasessiond`.
 - Creating network shares or Evidence Store hosting.

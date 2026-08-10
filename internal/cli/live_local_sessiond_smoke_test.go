@@ -255,7 +255,7 @@ $task = %s
 cmd.exe /c "schtasks.exe /Delete /TN $task /F 2>NUL" | Out-Null
 $start = (Get-Date).AddMinutes(1).ToString("HH:mm")
 $command = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + %s + '"'
-& schtasks.exe /Create /TN $task /SC ONCE /ST $start /TR $command /RL HIGHEST /IT /F | Out-Null
+& schtasks.exe /Create /TN $task /SC ONCE /ST $start /TR $command /RL LIMITED /IT /F | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "create interactive local proof task failed" }
 & schtasks.exe /Run /TN $task | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "start interactive local proof task failed" }

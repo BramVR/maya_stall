@@ -72,8 +72,8 @@ invokes `gg_maya_sessiond.cli` directly, moves only Run-owned files through the
 local filesystem, binds the fresh Sessiond session ID into the Host Lock, and
 stops only that exact ID. The adapter does not use SSH, SFTP, scheduled remote
 recovery, Control Plane, or Windows Host Agent. A protected controller may use
-a one-shot interactive task only to place the candidate CLI in that logged-in
-session; this is test control, not a local adapter lifecycle path.
+a one-shot `/IT /RL LIMITED` task only to place the candidate CLI in that
+logged-in session; this is test control, not a local adapter lifecycle path.
 
 Before live proof, record existing Maya/MayaMCP processes and treat them as
 unowned unless their exact Sessiond state and Host Lock prove otherwise. Use a
