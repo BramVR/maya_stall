@@ -46,6 +46,28 @@ func TestResolveRuntimeForHostAllowsOnlySupportedProfiles(t *testing.T) {
 			wantProofEligible: true,
 		},
 		{
+			name: "local Windows sessiond",
+			host: mayaHostConfig{
+				ID:        "local-workstation",
+				Transport: "local",
+				WorkRoot:  `C:\maya-stall-local`,
+				Broker: brokerConfig{
+					Structured: true,
+					Type:       "gg-mayasessiond",
+					StateDir:   `C:\maya-stall-local\sessiond`,
+					Python:     `C:\Python311\python.exe`,
+					Repo:       `C:\src\GG_MayaSessiond`,
+					MCPSource:  `C:\src\GG_MayaMCP`,
+					MayaExe:    `C:\Program Files\Autodesk\Maya2025\bin\maya.exe`,
+					Port:       7123,
+				},
+			},
+			wantProfile:       "local-sessiond",
+			wantHostAdapter:   "local-windows",
+			wantBrokerAdapter: "gg-mayasessiond",
+			wantProofEligible: true,
+		},
+		{
 			name:    "ssh without broker",
 			host:    mayaHostConfig{ID: "alpha", Transport: "ssh", SSH: sshConfig{Host: "maya-win-01"}, WorkRoot: "C:/maya-stall"},
 			wantErr: "SSH Maya Host requires broker.type: gg-mayasessiond",

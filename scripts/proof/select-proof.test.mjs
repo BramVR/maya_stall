@@ -32,7 +32,7 @@ test("selector requires live Maya proof for live product behavior paths", () => 
   ]);
   assert.equal(manifest.live_maya_reasons[0].rule, "session-broker");
   assert.equal(manifest.gates.live_maya.status, "required");
-  assert.equal(manifest.gates.live_maya.command, "go test -json ./internal/cli -run '^(TestOptInRealVisualEvidenceSmoke|TestOptInRealDesktopControlModalSmoke|TestOptInRealSSHDoctorSmoke|TestOptInRealPreRunReadinessSmoke|TestOptInRealSSHConsumingRepoSmoke|TestOptInRealSSHRunSmoke|TestOptInRealHostLockContentionAndRecoverySmoke|TestOptInRealRunScopedDesktopOpsSmoke)$' -count=1 -parallel=1 -timeout=20m");
+  assert.equal(manifest.gates.live_maya.command, "go test -json ./internal/cli -run '^(TestOptInRealVisualEvidenceSmoke|TestOptInRealDesktopControlModalSmoke|TestOptInRealSSHDoctorSmoke|TestOptInRealPreRunReadinessSmoke|TestOptInRealSSHConsumingRepoSmoke|TestOptInRealSSHRunSmoke|TestOptInRealHostLockContentionAndRecoverySmoke|TestOptInRealRunScopedDesktopOpsSmoke|TestOptInRealLocalSessiondRuntimeInputSmoke)$' -count=1 -parallel=1 -timeout=30m");
   assert.equal(manifest.gates.local.status, "pending");
   assert.equal(manifest.gates.docs.status, "pending");
   assert.equal(manifest.gates.artifacts.status, "pending");
