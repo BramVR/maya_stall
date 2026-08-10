@@ -38,9 +38,7 @@ func (host localWindowsHost) StagePayload(context runContext, payload []manifest
 	if err := rejectLocalWindowsReparseAncestors(runRoot); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(runRoot); err == nil {
-		return fmt.Errorf("local Windows Run workspace already exists for %s", context.RunWorkspace.RunID())
-	} else if !os.IsNotExist(err) {
+	if err := validateLocalWindowsPreStageRunRoot(runRoot); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.FromSlash(context.RunWorkspace.RemoteWorkspace()), 0o755); err != nil {
@@ -56,6 +54,46 @@ func (host localWindowsHost) StagePayload(context runContext, payload []manifest
 		}
 	}
 	return nil
+}
+
+func validateLocalWindowsPreStageRunRoot(runRoot string) error {
+	info, err := os.Lstat(runRoot)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || isReparsePoint(info) {
+		return fmt.Errorf("local Windows Run workspace is not a safe directory")
+	}
+	allowed := map[string]bool{
+		".":                                    true,
+		"workspace":                            true,
+		"workspace/.maya-stall-maya-build.py":  true,
+		"workspace/.maya-stall-maya-build.txt": true,
+	}
+	return filepath.WalkDir(runRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(runRoot, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if !allowed[relative] {
+			return fmt.Errorf("local Windows Run workspace contains unexpected pre-stage path %q", relative)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || isReparsePoint(info) {
+			return fmt.Errorf("local Windows Run workspace must not use a symlink or reparse point")
+		}
+		return nil
+	})
 }
 
 func (host localWindowsHost) CollectArtifacts(context runContext, scenario scenarioContract) error {

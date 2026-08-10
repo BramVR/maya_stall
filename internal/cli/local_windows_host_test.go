@@ -48,6 +48,15 @@ func TestLocalWindowsHostStagesVerifiedRuntimeInputCollectsOutputAndCleansOwnedR
 	}
 	context := runContext{RepoDir: repoDir, RunWorkspace: workspace, Workspace: workspace.LocalWorkspace()}
 	host := localWindowsHost{host: hostConfig}
+	remoteWorkspace := filepath.FromSlash(workspace.RemoteWorkspace())
+	if err := os.MkdirAll(remoteWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".maya-stall-maya-build.py", ".maya-stall-maya-build.txt"} {
+		if err := os.WriteFile(filepath.Join(remoteWorkspace, name), []byte("owned build probe\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := host.StagePayload(context, []manifestPayload{item}); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +92,29 @@ func TestLocalWindowsHostStagesVerifiedRuntimeInputCollectsOutputAndCleansOwnedR
 	}
 	if _, err := os.Stat(filepath.FromSlash(workspace.RemoteRunRoot())); !os.IsNotExist(err) {
 		t.Fatalf("owned local Run workspace remains after cleanup: %v", err)
+	}
+}
+
+func TestLocalWindowsHostRejectsUnexpectedPreStageRunResidue(t *testing.T) {
+	workRoot := filepath.Join(t.TempDir(), "maya-stall-local")
+	hostConfig := mayaHostConfig{
+		ID: "local-test", Transport: "local", WorkRoot: workRoot,
+		Broker: brokerConfig{Structured: true, Type: "gg-mayasessiond", StateDir: filepath.Join(workRoot, "sessiond"), Python: `C:\python.exe`, Repo: `C:\sessiond`, MCPSource: `C:\mcp`, MayaExe: `C:\maya.exe`, Port: 7123},
+	}
+	workspace, err := newRunWorkspace(t.TempDir(), "run-local-residue", workRoot, "scenario-result.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unexpected := filepath.Join(filepath.FromSlash(workspace.RemoteWorkspace()), "unexpected.txt")
+	if err := os.MkdirAll(filepath.Dir(unexpected), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unexpected, []byte("not owned by build verification\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	context := runContext{RunWorkspace: workspace}
+	if err := (localWindowsHost{host: hostConfig}).StagePayload(context, nil); err == nil || !strings.Contains(err.Error(), "unexpected pre-stage path") {
+		t.Fatalf("unexpected pre-stage residue error = %v", err)
 	}
 }
 
