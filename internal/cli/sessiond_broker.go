@@ -21,12 +21,17 @@ const (
 	sessiondCommandTimeout        = 2 * time.Minute
 	sessiondSessionStartTimeout   = 5 * time.Minute
 	sessiondSessionPollInterval   = 5 * time.Second
+	sessiondReadinessProbeTimeout = 30 * time.Second
 	sessiondRecoveryTimeout       = 3 * time.Minute
 	defaultSessiondRecoveryTask   = "MayaStallSessiondUI"
 	sessiondReasonCommandPortDown = "command-port-unreachable"
 )
 
 var errSSHCommandTimedOut = errors.New("ssh command timed out")
+
+var waitSessiondSessionPoll = func() {
+	time.Sleep(sessiondSessionPollInterval)
+}
 
 type ggMayaSessiondBroker struct {
 	host mayaHostConfig
@@ -248,12 +253,24 @@ func (broker ggMayaSessiondBroker) awaitFreshSession(previousSessionID string) (
 		case previousSessionID != "" && status.State.SessionID == previousSessionID:
 			lastDetail = fmt.Sprintf("gg_mayasessiond still reports inherited session %s", previousSessionID)
 		case sessiondFreshSessionReady(status):
-			return identity, nil
+			result, probeErr := broker.callTool("scene.info", nil, sessiondReadinessProbeTimeout)
+			switch {
+			case probeErr != nil:
+				lastDetail = fmt.Sprintf("gg_mayasessiond scene.info readiness probe failed: %s", probeErr)
+			case !result.OK && result.Error != "":
+				lastDetail = fmt.Sprintf("gg_mayasessiond scene.info readiness probe failed: %s", result.Error)
+			case !result.OK:
+				lastDetail = "gg_mayasessiond scene.info readiness probe did not report success"
+			case result.Tool != "scene.info":
+				lastDetail = fmt.Sprintf("gg_mayasessiond scene.info readiness probe returned tool %q", result.Tool)
+			default:
+				return identity, nil
+			}
 		}
 		if !time.Now().Before(deadline) {
 			return identity, fmt.Errorf("fresh gg_mayasessiond Maya UI Session was not ready within %s: %s", sessiondSessionStartTimeout, lastDetail)
 		}
-		time.Sleep(sessiondSessionPollInterval)
+		waitSessiondSessionPoll()
 	}
 }
 

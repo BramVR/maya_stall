@@ -323,7 +323,10 @@ broker:
 `recoveryTask` is optional and defaults to the prepare script's
 `MayaStallSessiondUI` interactive scheduled task. Each Fresh Run stops an
 existing daemon session, restarts that task, waits for a new ready broker
-session identity, and refuses to reuse the previous identity. The same task
+session identity, proves Maya tool readiness with a read-only `scene.info`
+call, and refuses to reuse the previous identity. A running daemon and ready
+call server alone do not prove that Maya's commandPort has finished
+initializing. The same task
 recovers commandPort health before a live Scenario starts. A `stopped` Stop
 Policy stops that exact Maya UI Session; a `kept` policy retains its identity
 for `status`, `attach`, and `stop`.

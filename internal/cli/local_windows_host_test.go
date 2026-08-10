@@ -141,6 +141,11 @@ func TestLocalWindowsBrokerStartsAndOwnsExactDirectSessiondSession(t *testing.T)
 			status.State.SessionID = "owned-local-session"
 			status.State.CallServerReady = true
 			return json.Marshal(status)
+		case "call":
+			if !containsString(args, "scene.info") {
+				t.Fatalf("local Sessiond readiness call = %#v, want scene.info", args)
+			}
+			return []byte(`{"ok":true,"tool":"scene.info"}`), nil
 		default:
 			t.Fatalf("unexpected local Sessiond operation %q", args[0])
 			return nil, nil
@@ -158,8 +163,55 @@ func TestLocalWindowsBrokerStartsAndOwnsExactDirectSessiondSession(t *testing.T)
 	if identity.SessionID != "owned-local-session" || identity.BrokerAdapter != "gg-mayasessiond" {
 		t.Fatalf("session identity = %+v", identity)
 	}
-	if len(calls) != 3 || calls[1][0] != "start" || !containsString(calls[1], "--maya-exe") || !containsString(calls[1], "--mcp-src") || !containsString(calls[1], "--port") {
+	if len(calls) != 4 || calls[1][0] != "start" || !containsString(calls[1], "--maya-exe") || !containsString(calls[1], "--mcp-src") || !containsString(calls[1], "--port") || calls[3][0] != "call" {
 		t.Fatalf("local Sessiond calls = %#v", calls)
+	}
+}
+
+func TestLocalWindowsBrokerWaitsForMayaToolReadinessAfterCallServerStarts(t *testing.T) {
+	workRoot := filepath.Join(t.TempDir(), "maya-stall-local")
+	broker := ggMayaSessiondBroker{host: mayaHostConfig{
+		ID: "local-test", Transport: "local", WorkRoot: workRoot,
+		Broker: brokerConfig{Structured: true, Type: "gg-mayasessiond", StateDir: filepath.Join(workRoot, "sessiond"), Python: `C:\Python311\python.exe`, Repo: `C:\src\GG_MayaSessiond`, MCPSource: `C:\src\GG_MayaMCP`, MayaExe: `C:\Program Files\Autodesk\Maya2025\bin\maya.exe`, Port: 7123},
+	}}
+	previousCommand := runLocalSessiondCommand
+	previousPoll := waitSessiondSessionPoll
+	t.Cleanup(func() {
+		runLocalSessiondCommand = previousCommand
+		waitSessiondSessionPoll = previousPoll
+	})
+	statusCalls := 0
+	probeCalls := 0
+	pollCalls := 0
+	waitSessiondSessionPoll = func() { pollCalls++ }
+	runLocalSessiondCommand = func(_ ggMayaSessiondBroker, args []string, _ time.Duration) ([]byte, error) {
+		switch args[0] {
+		case "start":
+			return []byte(`{"ok":true}`), nil
+		case "status":
+			statusCalls++
+			if statusCalls == 1 {
+				return []byte(`{"has_state":false,"state":{},"derived_status":"missing"}`), nil
+			}
+			return []byte(`{"has_state":true,"derived_status":"running","state":{"status":"running","session_id":"owned-local-session","call_server_ready":true}}`), nil
+		case "call":
+			probeCalls++
+			if probeCalls == 1 {
+				return []byte(`{"ok":true,"tool":"status"}`), nil
+			}
+			return []byte(`{"ok":true,"tool":"scene.info"}`), nil
+		default:
+			t.Fatalf("unexpected local Sessiond operation %q", args[0])
+			return nil, nil
+		}
+	}
+
+	identity, err := broker.StartFreshSession(runContext{EventsPath: filepath.Join(t.TempDir(), "events.jsonl")}, scenarioConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.SessionID != "owned-local-session" || probeCalls != 2 || pollCalls != 1 {
+		t.Fatalf("identity=%+v probeCalls=%d pollCalls=%d, want owned identity after one readiness retry", identity, probeCalls, pollCalls)
 	}
 }
 

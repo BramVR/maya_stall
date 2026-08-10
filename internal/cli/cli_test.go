@@ -9166,6 +9166,10 @@ if [ "$default_readiness" = "1" ] && printf '%%s' "$decoded" | grep -q "maya-sta
   printf '%%s\n' '{"state_dir":"C:/maya-stall/sessiond-ui","has_state":true,"derived_status":"stopped","state":{"status":"stopped","session_id":"session-previous"}}'
   exit 0
 fi
+if [ "$default_readiness" = "1" ] && printf '%%s' "$decoded" | grep -q "'call'" && printf '%%s' "$decoded" | grep -q "scene.info"; then
+  printf '%%s\n' '{"ok":true,"tool":"scene.info"}'
+  exit 0
+fi
 if [ ! -f %[2]s ] && printf '%%s' "$decoded" | grep -q "'stop'" && ! printf '%%s' "$decoded" | grep -q "Get-ScheduledTask"; then
   inherited_stop_failure=%[3]s
   if [ -n "$inherited_stop_failure" ]; then

@@ -22,6 +22,9 @@ manifest, Evidence Bundle, Validators, Stop Policy, Run Ledger, and cleanup.
 It invokes one explicitly configured `gg_mayasessiond` checkout directly and
 uses local filesystem staging/collection. SSH, SFTP, scheduled remote recovery,
 Configured Control Plane, and Windows Host Agent paths are not fallback paths.
+For both local and SSH adapters, `running` plus `call_server_ready` is only an
+intermediate state: Fresh Run waits until a read-only `scene.info` call also
+succeeds before treating the new Maya UI Session as executable.
 
 The configured work root identifies one workstation execution slot, independent
 of consuming-repo host aliases. Its fixed `state/locks/hosts/host.lock` is
