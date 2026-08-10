@@ -584,7 +584,13 @@ func mayaVersionMismatchHint(required string, installed string) string {
 
 func hostLockLayer(repoDir string, host mayaHostConfig) doctorCheck {
 	if lockDir, ok := fakeHostSideLockDir(host); ok {
-		check := withSource(localHostLockLayer(filepath.Join(lockDir, host.ID+".lock"), host.ID, isStaleHostSideLock), "maya-host")
+		isStale := isStaleHostSideLock
+		if host.usesLocalWindows() {
+			isStale = func(lockPath string) (bool, error) {
+				return isRecoverableLocalSessiondHostLock(host, lockPath)
+			}
+		}
+		check := withSource(localHostLockLayer(filepath.Join(lockDir, localHostSideLockID(host)+".lock"), host.ID, isStale), "maya-host")
 		return hostLockLayerWithLegacyLocal(repoDir, host.ID, check)
 	}
 	if host.usesRealSSH() {

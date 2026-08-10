@@ -265,12 +265,21 @@ func (host realSSHHost) StagePayload(context runContext, payload []manifestPaylo
 
 func validatePayloadSnapshotForStage(context runContext, payload []manifestPayload) error {
 	for _, item := range payload {
-		if err := rejectSFTPRepoPath(item.Source); err != nil {
-			return fmt.Errorf("stage %s payload: %w", item.Kind, err)
+		relative, err := filepath.Rel(context.RunWorkspace.LocalPayloadRoot(), context.RunWorkspace.LocalPayloadPath(item))
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("stage %s payload has unsafe staged path %q", item.Kind, item.Staged)
 		}
-		snapshotRoot := filepath.Join(context.RunWorkspace.LocalPayloadRoot(), item.Kind)
-		if err := validatePayloadPathForTransport(snapshotRoot, item.Source); err != nil {
-			return fmt.Errorf("stage %s payload %s: %w", item.Kind, item.Source, err)
+		if err := validatePayloadPathForTransport(context.RunWorkspace.LocalPayloadRoot(), filepath.ToSlash(relative)); err != nil {
+			return fmt.Errorf("stage %s payload %s: %w", item.Kind, item.Name+item.Source, err)
+		}
+		if item.SHA256 != "" {
+			size, hash, err := summarizePlanPayload(context.RunWorkspace.LocalPayloadPath(item))
+			if err != nil {
+				return fmt.Errorf("verify staged runtime input %q: %w", item.Name, err)
+			}
+			if size != item.Size || hash != item.SHA256 {
+				return fmt.Errorf("staged runtime input %q changed after snapshot", item.Name)
+			}
 		}
 	}
 	return nil

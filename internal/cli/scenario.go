@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 type scenarioContract struct {
@@ -94,7 +96,66 @@ func normalizeRunPayload(payload runPayload) (runPayload, error) {
 	if payload.IncludePaths, err = normalizeScenarioPaths(payload.IncludePaths); err != nil {
 		return runPayload{}, err
 	}
+	if payload.RuntimeInputs, err = normalizeRuntimeInputDeclarations(payload.RuntimeInputs); err != nil {
+		return runPayload{}, err
+	}
 	return payload, nil
+}
+
+func normalizeRuntimeInputDeclarations(declarations map[string]runtimeInputDeclaration) (map[string]runtimeInputDeclaration, error) {
+	if declarations == nil {
+		return nil, nil
+	}
+	normalized := make(map[string]runtimeInputDeclaration, len(declarations))
+	destinations := make(map[string]string, len(declarations))
+	names := make([]string, 0, len(declarations))
+	for name := range declarations {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		declaration := declarations[name]
+		if err := validateRuntimeInputName(name); err != nil {
+			return nil, err
+		}
+		kind := strings.ToLower(strings.TrimSpace(declaration.Kind))
+		if kind != "file" {
+			return nil, fmt.Errorf("runtime input %q kind must be file", name)
+		}
+		if len(declaration.Extensions) == 0 {
+			return nil, fmt.Errorf("runtime input %q extensions must contain at least one allowlisted extension", name)
+		}
+		exts := make([]string, 0, len(declaration.Extensions))
+		seenExtensions := make(map[string]bool)
+		for _, extension := range declaration.Extensions {
+			extension = strings.ToLower(strings.TrimSpace(extension))
+			if len(extension) < 2 || extension[0] != '.' || strings.ContainsAny(extension, "/\\\x00\r\n") {
+				return nil, fmt.Errorf("runtime input %q has invalid extension %q", name, extension)
+			}
+			if forbiddenRuntimeInputExtension(extension) {
+				return nil, fmt.Errorf("runtime input %q extension %q is not allowed for runtime files", name, extension)
+			}
+			if !seenExtensions[extension] {
+				seenExtensions[extension] = true
+				exts = append(exts, extension)
+			}
+		}
+		sort.Strings(exts)
+		destination, err := cleanScenarioPath(declaration.Destination)
+		if err != nil {
+			return nil, fmt.Errorf("runtime input %q destination: %w", name, err)
+		}
+		destinationExtension := strings.ToLower(filepath.Ext(destination))
+		if !seenExtensions[destinationExtension] {
+			return nil, fmt.Errorf("runtime input %q destination extension %q is not in its allowlist", name, destinationExtension)
+		}
+		if other, exists := destinations[strings.ToLower(destination)]; exists {
+			return nil, fmt.Errorf("runtime inputs %q and %q use the same destination %q", other, name, destination)
+		}
+		destinations[strings.ToLower(destination)] = name
+		normalized[name] = runtimeInputDeclaration{Kind: kind, Extensions: exts, Destination: destination}
+	}
+	return normalized, nil
 }
 
 func normalizeValidators(validators []validatorConfig) ([]validatorConfig, error) {

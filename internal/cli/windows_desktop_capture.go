@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,10 @@ type windowsDesktopTransport interface {
 
 type sshWindowsDesktopTransport mayaHostConfig
 
+type localWindowsDesktopTransport struct {
+	workRoot string
+}
+
 var lookPath = exec.LookPath
 
 func (transport sshWindowsDesktopTransport) RunPowerShell(script string, timeout time.Duration) ([]byte, error) {
@@ -31,8 +36,94 @@ func (transport sshWindowsDesktopTransport) WritePowerShellScript(remotePath str
 	return writeRemotePowerShellScript(mayaHostConfig(transport), remotePath, content, timeout)
 }
 
+func (transport localWindowsDesktopTransport) RunPowerShell(script string, timeout time.Duration) ([]byte, error) {
+	if timeout <= 0 {
+		timeout = sessiondCommandTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	encoded := base64.StdEncoding.EncodeToString(utf16LEBytes(script))
+	command := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	raw, err := command.Output()
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("run local Windows PowerShell timed out after %s", timeout)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("run local Windows PowerShell: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return raw, nil
+}
+
+func utf16LEBytes(value string) []byte {
+	runes := []rune(value)
+	encoded := make([]byte, 0, len(runes)*2)
+	for _, character := range runes {
+		if character <= 0xffff {
+			encoded = append(encoded, byte(character), byte(character>>8))
+			continue
+		}
+		character -= 0x10000
+		high := uint16(0xd800 + (character >> 10))
+		low := uint16(0xdc00 + (character & 0x3ff))
+		encoded = append(encoded, byte(high), byte(high>>8), byte(low), byte(low>>8))
+	}
+	return encoded
+}
+
+func (transport localWindowsDesktopTransport) WritePowerShellScript(path string, content string, _ time.Duration) error {
+	localPath := filepath.FromSlash(path)
+	if err := requireLocalWindowsPathWithin(filepath.FromSlash(remoteJoin(transport.workRoot, "runs")), localPath); err != nil {
+		return err
+	}
+	if err := rejectLocalWindowsReparseAncestors(localPath); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(localPath, []byte(content), 0o644)
+}
+
 func captureWindowsDesktopScreenshot(transport windowsDesktopTransport, remoteRoot string) ([]byte, error) {
-	return transport.RunPowerShell(windowsDesktopScreenshotPowerShell(remoteRoot), sessiondCommandTimeout)
+	data, err := transport.RunPowerShell(windowsDesktopScreenshotPowerShell(remoteRoot), sessiondCommandTimeout)
+	if err == nil && len(data) == 0 {
+		return nil, fmt.Errorf("Windows desktop screenshot capture returned no image bytes")
+	}
+	return data, err
+}
+
+func captureLocalWindowsDesktopScreenshot(transport windowsDesktopTransport) ([]byte, error) {
+	data, err := transport.RunPowerShell(localWindowsDesktopScreenshotPowerShell(), sessiondCommandTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("local Windows desktop screenshot capture returned no image bytes")
+	}
+	return data, nil
+}
+
+func localWindowsDesktopScreenshotPowerShell() string {
+	return `$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw "interactive desktop session is unavailable for screenshot capture" }
+$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$stream = New-Object IO.MemoryStream
+try {
+  $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+  $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+  $data = $stream.ToArray()
+  [Console]::OpenStandardOutput().Write($data, 0, $data.Length)
+} finally {
+  $stream.Dispose()
+  $graphics.Dispose()
+  $bitmap.Dispose()
+}`
 }
 
 func clickWindowsDesktop(transport windowsDesktopTransport, remoteRoot string, x int, y int) error {
@@ -176,7 +267,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "failed to create interactive desktop screenshot task with schtasks.exe /IT; ensure an interactive desktop session is logged in" }
   schtasks.exe /Run /TN $taskName | Out-Null
   for ($i = 0; $i -lt 40; $i++) {
-    if (Test-Path -LiteralPath $out) {
+    if ((Test-Path -LiteralPath $out) -and (Get-Item -LiteralPath $out).Length -gt 0) {
       try {
         $stream = [IO.File]::Open($out, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         try {

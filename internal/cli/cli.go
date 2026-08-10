@@ -69,6 +69,10 @@ func RunWithRuntime(args []string, stdout io.Writer, stderr io.Writer, workDir s
 	case "plan":
 		options, err := parsePlanArgs(args[1:])
 		if err != nil {
+			if requestedRunJSON(args[1:]) {
+				printRunCommandJSON(stdout, runCommandJSON{Version: 1, Kind: "usage-error", Accepted: false, Error: err.Error()})
+				return 2
+			}
 			_, _ = fmt.Fprintf(stderr, "maya-stall plan: %v\n", err)
 			return 2
 		}
@@ -579,9 +583,9 @@ Usage:
   maya-stall version
   maya-stall init
   maya-stall doctor [--host-config <path>] [--target-profile <name>] [--host <id>] [--scenario <name>] [--repair-trusted-plugin-allowlist]
-  maya-stall plan [--json] [--host-config <path>] <scenario>
+  maya-stall plan [--json] [--host-config <path>] [--input <name=absolute-file>]... <scenario>
   maya-stall history [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] [--before-run <run-id>] [--scenario <name>] [--host <id>] [--state <state>] [--since <duration-or-rfc3339>]
-  maya-stall run [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] [--host-config <path>] [--target-profile <name>] [--host <id>] [--host-lock-wait <duration>|--host-lock-fail-fast] [--keep-ttl <duration>] [--keep-on-failure|--stop-after <success|failure|always|never>] <scenario>
+  maya-stall run [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] [--host-config <path>] [--target-profile <name>] [--host <id>] [--input <name=absolute-file>]... [--host-lock-wait <duration>|--host-lock-fail-fast] [--keep-ttl <duration>] [--keep-on-failure|--stop-after <success|failure|always|never>] <scenario>
   maya-stall status [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] --run <run-id>
   maya-stall events [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] [--from-sequence <number>] <run-id>
   maya-stall logs [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] <run-id>
@@ -644,10 +648,11 @@ type runOptions struct {
 	SharedFakeWorkRoot   string
 	KeptSessionRepoRoot  string
 	BeforeHostLock       func(mayaHostConfig)
+	InputBindings        map[string]string
 }
 
 func parseRunArgs(args []string) (runOptions, error) {
-	options := runOptions{TargetProfile: "default", StopAfter: stopAfterAlways}
+	options := runOptions{TargetProfile: "default", StopAfter: stopAfterAlways, InputBindings: make(map[string]string)}
 	selection := preScanControlPlaneSelection(args)
 	options.ControlPlane = selection.ControlPlane
 	options.ControlPlaneSet = selection.ControlPlaneSet
@@ -677,6 +682,19 @@ func parseRunArgs(args []string) (runOptions, error) {
 				return options, newUsageError("--host-config needs a path")
 			}
 			options.HostConfig = args[i]
+		case "--input":
+			i++
+			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "--") {
+				return options, newUsageError("--input needs name=absolute-file")
+			}
+			name, source, err := parseRuntimeInputBinding(args[i])
+			if err != nil {
+				return options, err
+			}
+			if _, exists := options.InputBindings[name]; exists {
+				return options, newUsageError("runtime input %q is bound more than once", name)
+			}
+			options.InputBindings[name] = source
 		case "--target-profile":
 			i++
 			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "--") {
@@ -745,6 +763,9 @@ func parseRunArgs(args []string) (runOptions, error) {
 	}
 	if options.ScenarioName == "" {
 		return options, newUsageError("expected Scenario name")
+	}
+	if options.ControlPlane != "" && len(options.InputBindings) > 0 {
+		return options, newUsageError("--input is available only for Embedded Mode runs; omit --control-plane")
 	}
 	return options, nil
 }

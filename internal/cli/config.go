@@ -26,12 +26,19 @@ type scenarioConfig struct {
 }
 
 type runPayload struct {
-	MayaScripts     []string `yaml:"mayaScripts"`
-	Scripts         []string `yaml:"scripts"`
-	Scenes          []string `yaml:"scenes"`
-	PluginArtifacts []string `yaml:"pluginArtifacts"`
-	ExpectedOutputs []string `yaml:"expectedOutputs"`
-	IncludePaths    []string `yaml:"includePaths"`
+	MayaScripts     []string                           `yaml:"mayaScripts"`
+	Scripts         []string                           `yaml:"scripts"`
+	Scenes          []string                           `yaml:"scenes"`
+	PluginArtifacts []string                           `yaml:"pluginArtifacts"`
+	ExpectedOutputs []string                           `yaml:"expectedOutputs"`
+	IncludePaths    []string                           `yaml:"includePaths"`
+	RuntimeInputs   map[string]runtimeInputDeclaration `yaml:"runtimeInputs"`
+}
+
+type runtimeInputDeclaration struct {
+	Kind        string   `yaml:"kind"`
+	Extensions  []string `yaml:"extensions"`
+	Destination string   `yaml:"destination"`
 }
 
 type expectedOutputs struct {
