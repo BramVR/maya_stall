@@ -5153,10 +5153,14 @@ func TestRunScenarioGGMayaSessiondBrokerExecutesRemoteScenarioAndCapturesScreens
 	sftpLog := filepath.Join(dir, "sftp.log")
 	sftpPath := writeFakeSFTPCommand(t, dir, sftpLog)
 	sshLog := filepath.Join(dir, "ssh.log")
+	jpegPath := filepath.Join(dir, "desktop-screenshot.jpg")
+	if err := os.WriteFile(jpegPath, validJPEGBytes(t), 0o644); err != nil {
+		t.Fatalf("write desktop screenshot fixture: %v", err)
+	}
 	sshPath := writeSequencedFakeSSHCommand(t, dir, sshLog, []string{
 		sessiondStatusFixture("session-alpha"),
 		`{"ok":true,"tool":"script.execute"}`,
-		`png proof`,
+		"@file:" + jpegPath,
 		``,
 		sessiondStatusFixture("session-fresh"),
 	})
@@ -5207,8 +5211,8 @@ hostPools:
 	if err != nil {
 		t.Fatalf("read sessiond screenshot: %v", err)
 	}
-	if !strings.Contains(string(screenshotBytes), "png proof") {
-		t.Fatalf("sessiond screenshot bytes = %q, want png proof", string(screenshotBytes))
+	if !looksLikeImageBytes("image/png", screenshotBytes) {
+		t.Fatalf("sessiond screenshot bytes do not contain the transcoded PNG: %v", screenshotBytes)
 	}
 	bundle := readEvidenceBundle(t, evidence)
 	if len(bundle.VisualEvidence) != 1 || bundle.VisualEvidence[0].MediaType != "image/png" {
@@ -6162,8 +6166,12 @@ hostPools:
 
 func TestStandaloneSessiondScreenshotLabelsRealBrokerEvidence(t *testing.T) {
 	dir := writeRunConfigFixture(t)
+	jpegPath := filepath.Join(dir, "desktop-screenshot.jpg")
+	if err := os.WriteFile(jpegPath, validJPEGBytes(t), 0o644); err != nil {
+		t.Fatalf("write desktop screenshot fixture: %v", err)
+	}
 	sshPath := writeSequencedFakeSSHCommand(t, dir, filepath.Join(dir, "ssh.log"), []string{
-		`{"ok":true,"tool":"viewport.capture","content":[{"type":"image","data":"` + base64.StdEncoding.EncodeToString([]byte("jpeg proof")) + `","mimeType":"image/jpeg"}]}`,
+		"@file:" + jpegPath,
 	})
 	hostConfigPath := filepath.Join(dir, "ci-hosts.yaml")
 	mustWriteFile(t, hostConfigPath, `version: 1
@@ -6192,6 +6200,10 @@ hostPools:
 		t.Fatalf("screenshot exit code = %d, want 0; stdout: %s stderr: %s", code, stdout.String(), stderr.String())
 	}
 	evidence := onlyRunDir(t, filepath.Join(dir, "artifacts", "maya-stall"))
+	screenshotBytes, err := os.ReadFile(filepath.Join(evidence, "screenshots", "desktop-screenshot.png"))
+	if err != nil || !looksLikeImageBytes("image/png", screenshotBytes) {
+		t.Fatalf("standalone screenshot is not a transcoded PNG: bytes=%v err=%v", screenshotBytes, err)
+	}
 	logBytes, err := os.ReadFile(filepath.Join(evidence, "logs", "session.log"))
 	if err != nil {
 		t.Fatalf("read evidence log: %v", err)
