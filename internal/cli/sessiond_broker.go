@@ -253,18 +253,10 @@ func (broker ggMayaSessiondBroker) awaitFreshSession(previousSessionID string) (
 		case previousSessionID != "" && status.State.SessionID == previousSessionID:
 			lastDetail = fmt.Sprintf("gg_mayasessiond still reports inherited session %s", previousSessionID)
 		case sessiondFreshSessionReady(status):
-			result, probeErr := broker.callTool("scene.info", nil, sessiondReadinessProbeTimeout)
-			switch {
-			case probeErr != nil:
-				lastDetail = fmt.Sprintf("gg_mayasessiond scene.info readiness probe failed: %s", probeErr)
-			case !result.OK && result.Error != "":
-				lastDetail = fmt.Sprintf("gg_mayasessiond scene.info readiness probe failed: %s", result.Error)
-			case !result.OK:
-				lastDetail = "gg_mayasessiond scene.info readiness probe did not report success"
-			case result.Tool != "scene.info":
-				lastDetail = fmt.Sprintf("gg_mayasessiond scene.info readiness probe returned tool %q", result.Tool)
-			default:
+			if probeErr := broker.probeMayaToolReadiness(); probeErr == nil {
 				return identity, nil
+			} else {
+				lastDetail = fmt.Sprintf("gg_mayasessiond Maya tool readiness probe failed: %s", probeErr)
 			}
 		}
 		if !time.Now().Before(deadline) {
@@ -272,6 +264,41 @@ func (broker ggMayaSessiondBroker) awaitFreshSession(previousSessionID string) (
 		}
 		waitSessiondSessionPoll()
 	}
+}
+
+func (broker ggMayaSessiondBroker) probeMayaToolReadiness() error {
+	result, err := broker.callTool("scene.info", nil, sessiondReadinessProbeTimeout)
+	if err != nil {
+		return fmt.Errorf("scene.info: %w", err)
+	}
+	if !result.OK {
+		if result.Error != "" {
+			return fmt.Errorf("scene.info: %s", result.Error)
+		}
+		return fmt.Errorf("scene.info did not report success")
+	}
+	if result.Tool != "scene.info" {
+		return fmt.Errorf("scene.info returned tool %q", result.Tool)
+	}
+	capture, err := broker.callReadinessCapture()
+	if err != nil {
+		return fmt.Errorf("viewport.capture: %w", err)
+	}
+	if !capture.OK {
+		if capture.Error != "" {
+			return fmt.Errorf("viewport.capture: %s", capture.Error)
+		}
+		return fmt.Errorf("viewport.capture did not report success")
+	}
+	if capture.Tool != "viewport.capture" {
+		return fmt.Errorf("viewport.capture returned tool %q", capture.Tool)
+	}
+	for _, content := range capture.Content {
+		if content.Type == "image" && content.Data != "" && strings.HasPrefix(content.MimeType, "image/") {
+			return nil
+		}
+	}
+	return fmt.Errorf("viewport.capture returned no image content")
 }
 
 func (broker ggMayaSessiondBroker) stopSessiondSession() error {
@@ -1022,6 +1049,18 @@ func (broker ggMayaSessiondBroker) callCapture() (sessiondCaptureResult, error) 
 	var result sessiondCaptureResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return sessiondCaptureResult{}, fmt.Errorf("parse gg_mayasessiond viewport.capture JSON: %w", err)
+	}
+	return result, nil
+}
+
+func (broker ggMayaSessiondBroker) callReadinessCapture() (sessiondCaptureResult, error) {
+	raw, err := broker.runSessiondCLI([]string{"call", "--state-dir", broker.host.Broker.StateDir, "viewport.capture", "format=jpeg", "width=64", "height=64", "quality=1", "show_ornaments=false", "--json"}, sessiondReadinessProbeTimeout)
+	if err != nil {
+		return sessiondCaptureResult{}, err
+	}
+	var result sessiondCaptureResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return sessiondCaptureResult{}, fmt.Errorf("parse gg_mayasessiond viewport.capture readiness JSON: %w", err)
 	}
 	return result, nil
 }

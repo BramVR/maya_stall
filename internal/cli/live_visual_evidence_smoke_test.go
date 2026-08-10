@@ -945,7 +945,8 @@ cd %s
 }
 
 func liveSessionBrokerFixtureReady(host mayaHostConfig) error {
-	status, err := ggMayaSessiondBroker{host: host}.status()
+	broker := ggMayaSessiondBroker{host: host}
+	status, err := broker.status()
 	if err != nil {
 		return err
 	}
@@ -966,7 +967,7 @@ func liveSessionBrokerFixtureReady(host mayaHostConfig) error {
 	if err := requireConsoleMayaProcess(processes); err != nil {
 		return err
 	}
-	return nil
+	return broker.probeMayaToolReadiness()
 }
 
 func restoreLiveSessionBrokerFixtures(t *testing.T, options realSSHSmokeOptions) {

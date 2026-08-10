@@ -9170,6 +9170,10 @@ if [ "$default_readiness" = "1" ] && printf '%%s' "$decoded" | grep -q "'call'" 
   printf '%%s\n' '{"ok":true,"tool":"scene.info"}'
   exit 0
 fi
+if [ "$default_readiness" = "1" ] && printf '%%s' "$decoded" | grep -q "viewport.capture" && printf '%%s' "$decoded" | grep -q "width=64" && printf '%%s' "$decoded" | grep -q "height=64"; then
+  printf '%%s\n' '{"ok":true,"tool":"viewport.capture","content":[{"type":"image","data":"AA==","mimeType":"image/jpeg"}]}'
+  exit 0
+fi
 if [ ! -f %[2]s ] && printf '%%s' "$decoded" | grep -q "'stop'" && ! printf '%%s' "$decoded" | grep -q "Get-ScheduledTask"; then
   inherited_stop_failure=%[3]s
   if [ -n "$inherited_stop_failure" ]; then

@@ -142,10 +142,14 @@ func TestLocalWindowsBrokerStartsAndOwnsExactDirectSessiondSession(t *testing.T)
 			status.State.CallServerReady = true
 			return json.Marshal(status)
 		case "call":
-			if !containsString(args, "scene.info") {
-				t.Fatalf("local Sessiond readiness call = %#v, want scene.info", args)
+			if containsString(args, "scene.info") {
+				return []byte(`{"ok":true,"tool":"scene.info"}`), nil
 			}
-			return []byte(`{"ok":true,"tool":"scene.info"}`), nil
+			if containsString(args, "viewport.capture") {
+				return []byte(`{"ok":true,"tool":"viewport.capture","content":[{"type":"image","data":"AA==","mimeType":"image/jpeg"}]}`), nil
+			}
+			t.Fatalf("unexpected local Sessiond readiness call %#v", args)
+			return nil, nil
 		default:
 			t.Fatalf("unexpected local Sessiond operation %q", args[0])
 			return nil, nil
@@ -163,7 +167,7 @@ func TestLocalWindowsBrokerStartsAndOwnsExactDirectSessiondSession(t *testing.T)
 	if identity.SessionID != "owned-local-session" || identity.BrokerAdapter != "gg-mayasessiond" {
 		t.Fatalf("session identity = %+v", identity)
 	}
-	if len(calls) != 4 || calls[1][0] != "start" || !containsString(calls[1], "--maya-exe") || !containsString(calls[1], "--mcp-src") || !containsString(calls[1], "--port") || calls[3][0] != "call" {
+	if len(calls) != 5 || calls[1][0] != "start" || !containsString(calls[1], "--maya-exe") || !containsString(calls[1], "--mcp-src") || !containsString(calls[1], "--port") || !containsString(calls[3], "scene.info") || !containsString(calls[4], "viewport.capture") {
 		t.Fatalf("local Sessiond calls = %#v", calls)
 	}
 }
@@ -182,6 +186,7 @@ func TestLocalWindowsBrokerWaitsForMayaToolReadinessAfterCallServerStarts(t *tes
 	})
 	statusCalls := 0
 	probeCalls := 0
+	captureCalls := 0
 	pollCalls := 0
 	waitSessiondSessionPoll = func() { pollCalls++ }
 	runLocalSessiondCommand = func(_ ggMayaSessiondBroker, args []string, _ time.Duration) ([]byte, error) {
@@ -195,11 +200,22 @@ func TestLocalWindowsBrokerWaitsForMayaToolReadinessAfterCallServerStarts(t *tes
 			}
 			return []byte(`{"has_state":true,"derived_status":"running","state":{"status":"running","session_id":"owned-local-session","call_server_ready":true}}`), nil
 		case "call":
-			probeCalls++
-			if probeCalls == 1 {
-				return []byte(`{"ok":true,"tool":"status"}`), nil
+			if containsString(args, "scene.info") {
+				probeCalls++
+				if probeCalls == 1 {
+					return []byte(`{"ok":true,"tool":"status"}`), nil
+				}
+				return []byte(`{"ok":true,"tool":"scene.info"}`), nil
 			}
-			return []byte(`{"ok":true,"tool":"scene.info"}`), nil
+			if containsString(args, "viewport.capture") {
+				captureCalls++
+				if captureCalls == 1 {
+					return []byte(`{"ok":true,"tool":"viewport.capture"}`), nil
+				}
+				return []byte(`{"ok":true,"tool":"viewport.capture","content":[{"type":"image","data":"AA==","mimeType":"image/jpeg"}]}`), nil
+			}
+			t.Fatalf("unexpected local Sessiond readiness call %#v", args)
+			return nil, nil
 		default:
 			t.Fatalf("unexpected local Sessiond operation %q", args[0])
 			return nil, nil
@@ -210,8 +226,8 @@ func TestLocalWindowsBrokerWaitsForMayaToolReadinessAfterCallServerStarts(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.SessionID != "owned-local-session" || probeCalls != 2 || pollCalls != 1 {
-		t.Fatalf("identity=%+v probeCalls=%d pollCalls=%d, want owned identity after one readiness retry", identity, probeCalls, pollCalls)
+	if identity.SessionID != "owned-local-session" || probeCalls != 3 || captureCalls != 2 || pollCalls != 2 {
+		t.Fatalf("identity=%+v probeCalls=%d captureCalls=%d pollCalls=%d, want owned identity after scene and viewport readiness retries", identity, probeCalls, captureCalls, pollCalls)
 	}
 }
 

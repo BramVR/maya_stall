@@ -993,7 +993,7 @@ func TestGGMayaSessiondFreshSessionReadinessRequiresRunningStatus(t *testing.T) 
 
 func TestFreshRunAwareFakeSSHPreludeHandlesSceneInfoReadinessProbe(t *testing.T) {
 	prelude := freshRunAwareFakeSSHPrelude(t.TempDir(), "fake-ssh", "", "", true)
-	for _, expected := range []string{"scene.info", `{"ok":true,"tool":"scene.info"}`} {
+	for _, expected := range []string{"scene.info", `{"ok":true,"tool":"scene.info"}`, "viewport.capture", `"mimeType":"image/jpeg"`} {
 		if !strings.Contains(prelude, expected) {
 			t.Fatalf("fake SSH readiness prelude missing %q", expected)
 		}
