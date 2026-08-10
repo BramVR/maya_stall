@@ -127,19 +127,24 @@ Repo checkouts using the same work root contend on the alias-independent
 `workRoot/state/locks/hosts/host.lock`.
 
 ```yaml
-hosts:
-  - id: local-workstation
-    transport: local
-    workRoot: C:/maya-stall-local
-    broker:
-      type: gg-mayasessiond
-      stateDir: C:/maya-stall-local/sessiond
-      python: C:/maya-stall/sessiond-venv311/Scripts/python.exe
-      repo: C:/src/GG_MayaSessiond
-      mcpSource: C:/src/GG_MayaMCP
-      mcpPython: C:/maya-stall/sessiond-venv311/Scripts/python.exe
-      mayaExe: C:/Program Files/Autodesk/Maya2025/bin/maya.exe
-      port: 7165
+version: 1
+targetProfiles:
+  workstation: {hostPool: local-workstation}
+hostPools:
+  local-workstation:
+    hosts:
+      - id: local-workstation
+        transport: local
+        workRoot: C:/maya-stall-local
+        broker:
+          type: gg-mayasessiond
+          stateDir: C:/maya-stall-local/sessiond
+          python: C:/maya-stall/sessiond-venv311/Scripts/python.exe
+          repo: C:/src/GG_MayaSessiond
+          mcpSource: C:/src/GG_MayaMCP
+          mcpPython: C:/maya-stall/sessiond-venv311/Scripts/python.exe
+          mayaExe: C:/Program Files/Autodesk/Maya2025/bin/maya.exe
+          port: 7165
 ```
 
 Runtime Inputs are snapshotted before Host Lock acquisition and before Maya
