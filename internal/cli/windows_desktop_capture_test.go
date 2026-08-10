@@ -17,6 +17,7 @@ import (
 func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testing.T) {
 	transport := &fakeWindowsDesktopTransport{
 		outputs: [][]byte{
+			nil,
 			validJPEGBytes(t),
 			nil,
 			zipFrameArchive(t),
@@ -66,7 +67,7 @@ func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testin
 }
 
 func TestWindowsDesktopScreenshotTranscodesHostJPEGToPNG(t *testing.T) {
-	transport := &fakeWindowsDesktopTransport{outputs: [][]byte{validJPEGBytes(t)}}
+	transport := &fakeWindowsDesktopTransport{outputs: [][]byte{nil, validJPEGBytes(t)}}
 	screenshot, err := captureWindowsDesktopScreenshot(transport, "C:/maya-stall/artifacts/proof")
 	if err != nil {
 		t.Fatalf("captureWindowsDesktopScreenshot returned error: %v", err)
@@ -74,8 +75,21 @@ func TestWindowsDesktopScreenshotTranscodesHostJPEGToPNG(t *testing.T) {
 	if !looksLikeImageBytes("image/png", screenshot) {
 		t.Fatalf("screenshot bytes do not contain a PNG transcoded from the Windows-host JPEG: %v", screenshot)
 	}
-	if script := strings.Join(transport.scripts, "\n"); !strings.Contains(script, `desktop-screenshot.jpg`) || !strings.Contains(script, `ImageFormat]::Jpeg`) {
+	if script := strings.Join(append(transport.scripts, transport.writes...), "\n"); !strings.Contains(script, `desktop-screenshot.jpg`) || !strings.Contains(script, `ImageFormat]::Jpeg`) {
 		t.Fatalf("desktop screenshot host script does not capture JPEG bytes:\n%s", script)
+	}
+}
+
+func TestWindowsDesktopScreenshotStagesLongControllerScript(t *testing.T) {
+	transport := &fakeWindowsDesktopTransport{outputs: [][]byte{nil, validJPEGBytes(t)}}
+	if _, err := captureWindowsDesktopScreenshot(transport, "C:/maya-stall/artifacts/proof"); err != nil {
+		t.Fatalf("captureWindowsDesktopScreenshot returned error: %v", err)
+	}
+	if len(transport.writes) != 1 || !strings.Contains(transport.writes[0], "desktop-screenshot-controller.ps1\n") || !strings.Contains(transport.writes[0], "MayaStallVisualEvidenceScreenshot-") {
+		t.Fatalf("desktop screenshot controller was not staged as a PowerShell file: %+v", transport.writes)
+	}
+	if len(transport.scripts) != 2 || !strings.Contains(transport.scripts[0], "New-Item -ItemType Directory") || transport.scripts[1] != `& 'C:/maya-stall/artifacts/proof/desktop-screenshot-controller.ps1'` {
+		t.Fatalf("desktop screenshot staged invocation = %+v", transport.scripts)
 	}
 }
 

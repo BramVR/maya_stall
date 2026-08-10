@@ -93,7 +93,14 @@ func (transport localWindowsDesktopTransport) WritePowerShellScript(path string,
 }
 
 func captureWindowsDesktopScreenshot(transport windowsDesktopTransport, remoteRoot string) ([]byte, error) {
-	data, err := transport.RunPowerShell(windowsDesktopScreenshotPowerShell(remoteRoot), sessiondCommandTimeout)
+	if _, err := transport.RunPowerShell(fmt.Sprintf("New-Item -ItemType Directory -Force -Path %s | Out-Null", powerShellSingleQuoted(remoteRoot)), sessiondCommandTimeout); err != nil {
+		return nil, err
+	}
+	scriptPath := remoteJoin(remoteRoot, "desktop-screenshot-controller.ps1")
+	if err := transport.WritePowerShellScript(scriptPath, windowsDesktopScreenshotPowerShell(remoteRoot), sessiondCommandTimeout); err != nil {
+		return nil, err
+	}
+	data, err := transport.RunPowerShell(fmt.Sprintf("& %s", powerShellSingleQuoted(scriptPath)), sessiondCommandTimeout)
 	if err != nil {
 		return nil, err
 	}
