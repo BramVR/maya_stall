@@ -6200,7 +6200,11 @@ hostPools:
 		t.Fatalf("screenshot exit code = %d, want 0; stdout: %s stderr: %s", code, stdout.String(), stderr.String())
 	}
 	evidence := onlyRunDir(t, filepath.Join(dir, "artifacts", "maya-stall"))
-	screenshotBytes, err := os.ReadFile(filepath.Join(evidence, "screenshots", "desktop-screenshot.png"))
+	bundle := readEvidenceBundle(t, evidence)
+	if len(bundle.VisualEvidence) != 1 || bundle.VisualEvidence[0].MediaType != "image/png" {
+		t.Fatalf("standalone screenshot metadata = %+v, want one PNG", bundle.VisualEvidence)
+	}
+	screenshotBytes, err := os.ReadFile(filepath.Join(evidence, filepath.FromSlash(bundle.VisualEvidence[0].Path)))
 	if err != nil || !looksLikeImageBytes("image/png", screenshotBytes) {
 		t.Fatalf("standalone screenshot is not a transcoded PNG: bytes=%v err=%v", screenshotBytes, err)
 	}
