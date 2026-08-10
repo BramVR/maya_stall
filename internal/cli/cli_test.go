@@ -5160,6 +5160,8 @@ func TestRunScenarioGGMayaSessiondBrokerExecutesRemoteScenarioAndCapturesScreens
 	sshPath := writeSequencedFakeSSHCommand(t, dir, sshLog, []string{
 		sessiondStatusFixture("session-alpha"),
 		`{"ok":true,"tool":"script.execute"}`,
+		``,
+		``,
 		"@file:" + jpegPath,
 		``,
 		sessiondStatusFixture("session-fresh"),
@@ -6171,6 +6173,8 @@ func TestStandaloneSessiondScreenshotLabelsRealBrokerEvidence(t *testing.T) {
 		t.Fatalf("write desktop screenshot fixture: %v", err)
 	}
 	sshPath := writeSequencedFakeSSHCommand(t, dir, filepath.Join(dir, "ssh.log"), []string{
+		``,
+		``,
 		"@file:" + jpegPath,
 	})
 	hostConfigPath := filepath.Join(dir, "ci-hosts.yaml")
