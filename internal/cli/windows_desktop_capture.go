@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"os"
 	"os/exec"
@@ -88,10 +90,21 @@ func (transport localWindowsDesktopTransport) WritePowerShellScript(path string,
 
 func captureWindowsDesktopScreenshot(transport windowsDesktopTransport, remoteRoot string) ([]byte, error) {
 	data, err := transport.RunPowerShell(windowsDesktopScreenshotPowerShell(remoteRoot), sessiondCommandTimeout)
-	if err == nil && len(data) == 0 {
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
 		return nil, fmt.Errorf("windows desktop screenshot capture returned no image bytes")
 	}
-	return data, err
+	image, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode Windows desktop screenshot JPEG: %w", err)
+	}
+	var output bytes.Buffer
+	if err := png.Encode(&output, image); err != nil {
+		return nil, fmt.Errorf("encode Windows desktop screenshot PNG: %w", err)
+	}
+	return output.Bytes(), nil
 }
 
 func captureLocalWindowsDesktopScreenshot(transport windowsDesktopTransport) ([]byte, error) {
@@ -238,7 +251,7 @@ $root = %s
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) { throw "schtasks.exe is required for interactive desktop capture" }
 $taskName = "MayaStallVisualEvidenceScreenshot-" + [Guid]::NewGuid().ToString("N")
-$out = Join-Path $root "desktop-screenshot.png"
+$out = Join-Path $root "desktop-screenshot.jpg"
 $script = Join-Path $root ($taskName + ".ps1")
 $template = @'
 $ErrorActionPreference = "Stop"
@@ -253,7 +266,7 @@ if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw "interactive desktop s
 $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-$bitmap.Save("__MAYA_STALL_SCREENSHOT_OUT__", [System.Drawing.Imaging.ImageFormat]::Png)
+$bitmap.Save("__MAYA_STALL_SCREENSHOT_OUT__", [System.Drawing.Imaging.ImageFormat]::Jpeg)
 $graphics.Dispose()
 $bitmap.Dispose()
 '@

@@ -4,6 +4,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +17,7 @@ import (
 func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testing.T) {
 	transport := &fakeWindowsDesktopTransport{
 		outputs: [][]byte{
-			pngHeaderBytes(),
+			validJPEGBytes(t),
 			nil,
 			zipFrameArchive(t),
 		},
@@ -25,8 +28,8 @@ func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testin
 	if err != nil {
 		t.Fatalf("captureWindowsDesktopScreenshot returned error: %v", err)
 	}
-	if !bytes.Equal(screenshot, pngHeaderBytes()) {
-		t.Fatalf("screenshot bytes = %v, want PNG header", screenshot)
+	if !looksLikeImageBytes("image/png", screenshot) {
+		t.Fatalf("screenshot bytes do not contain a PNG transcoded from the Windows-host JPEG: %v", screenshot)
 	}
 
 	recording, err := captureWindowsDesktopRecording(transport, "C:/maya-stall/artifacts/proof", 2*time.Second, 2, ffmpeg)
@@ -41,6 +44,7 @@ func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testin
 	for _, want := range []string{
 		"System.Windows.Forms",
 		"System.Drawing",
+		"ImageFormat]::Jpeg",
 		"schtasks.exe",
 		"/IT",
 		"LIMITED",
@@ -59,6 +63,31 @@ func TestWindowsDesktopCaptureUsesInteractiveScheduledTasksAndCleansUp(t *testin
 	if strings.Contains(combined, "HIGHEST") {
 		t.Fatalf("desktop capture must not require an elevated scheduled task:\n%s", combined)
 	}
+}
+
+func TestWindowsDesktopScreenshotTranscodesHostJPEGToPNG(t *testing.T) {
+	transport := &fakeWindowsDesktopTransport{outputs: [][]byte{validJPEGBytes(t)}}
+	screenshot, err := captureWindowsDesktopScreenshot(transport, "C:/maya-stall/artifacts/proof")
+	if err != nil {
+		t.Fatalf("captureWindowsDesktopScreenshot returned error: %v", err)
+	}
+	if !looksLikeImageBytes("image/png", screenshot) {
+		t.Fatalf("screenshot bytes do not contain a PNG transcoded from the Windows-host JPEG: %v", screenshot)
+	}
+	if script := strings.Join(transport.scripts, "\n"); !strings.Contains(script, `desktop-screenshot.jpg`) || !strings.Contains(script, `ImageFormat]::Jpeg`) {
+		t.Fatalf("desktop screenshot host script does not capture JPEG bytes:\n%s", script)
+	}
+}
+
+func validJPEGBytes(t *testing.T) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	pixels := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	pixels.Set(0, 0, color.RGBA{R: 255, A: 255})
+	if err := jpeg.Encode(&output, pixels, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatalf("encode JPEG fixture: %v", err)
+	}
+	return output.Bytes()
 }
 
 func TestWindowsDesktopCaptureUsesFullVirtualDesktopBounds(t *testing.T) {

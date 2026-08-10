@@ -411,8 +411,10 @@ Doctor layer:
   configured screenshot path when Scenario screenshot evidence is enabled.
 - Treat viewport capture alone as insufficient if the Maya process is not in the interactive desktop.
 - Keep Visual Evidence enabled for CI proof unless a Scenario explicitly does not require it.
-- Screenshot capture writes PNG artifacts. Recording capture writes MP4
-  artifacts with Crabbox-like defaults of 10 seconds at 15 fps.
+- Screenshot capture writes PNG artifacts. For SSH Hosts, the interactive task
+  captures a transient JPEG and the controller transcodes it to PNG to reduce
+  memory pressure beside Maya. Recording capture writes MP4 artifacts with
+  Crabbox-like defaults of 10 seconds at 15 fps.
 
 Doctor layer:
 

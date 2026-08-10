@@ -562,7 +562,7 @@ func TestLiveVisualEvidenceHostProofDoesNotDependOnViewportCapture(t *testing.T)
 
 func TestWindowsDesktopCaptureCommandsUseInteractiveDesktop(t *testing.T) {
 	screenshot := windowsDesktopScreenshotPowerShell("C:/maya-stall/artifacts/proof")
-	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Png", "schtasks.exe", "/IT", "LIMITED", "MayaStallVisualEvidenceScreenshot"} {
+	for _, want := range []string{"System.Windows.Forms", "ImageFormat]::Jpeg", "desktop-screenshot.jpg", "schtasks.exe", "/IT", "LIMITED", "MayaStallVisualEvidenceScreenshot"} {
 		if !strings.Contains(screenshot, want) {
 			t.Fatalf("screenshot command missing %q:\n%s", want, screenshot)
 		}
