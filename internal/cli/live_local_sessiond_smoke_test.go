@@ -125,7 +125,7 @@ func buildLiveWindowsCandidate(t *testing.T, localRoot string) string {
 
 func writeLocalSessiondLiveFixture(t *testing.T, root, proofRoot, hostID, workRoot, stateDir, sessiondPython, sessiondRepo string, paths liveSessiondLaunchPaths, port int) {
 	t.Helper()
-	mustWriteFile(t, filepath.Join(root, ".maya-stall.yaml"), fmt.Sprintf(`version: 1
+	mustWriteFile(t, filepath.Join(root, ".maya-stall.yaml"), `version: 1
 scenarios:
   local-runtime-input:
     mayaVersion: "2025"
@@ -144,7 +144,7 @@ scenarios:
     validators:
       - {type: outputExists, path: outputs/runtime-input-proof.json}
       - {type: visualEvidence, required: true}
-`))
+`)
 	mustWriteFile(t, filepath.Join(root, "hosts.yaml"), fmt.Sprintf(`version: 1
 targetProfiles:
   local-live: {hostPool: local-workstation}

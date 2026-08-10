@@ -89,7 +89,7 @@ func (transport localWindowsDesktopTransport) WritePowerShellScript(path string,
 func captureWindowsDesktopScreenshot(transport windowsDesktopTransport, remoteRoot string) ([]byte, error) {
 	data, err := transport.RunPowerShell(windowsDesktopScreenshotPowerShell(remoteRoot), sessiondCommandTimeout)
 	if err == nil && len(data) == 0 {
-		return nil, fmt.Errorf("Windows desktop screenshot capture returned no image bytes")
+		return nil, fmt.Errorf("windows desktop screenshot capture returned no image bytes")
 	}
 	return data, err
 }
