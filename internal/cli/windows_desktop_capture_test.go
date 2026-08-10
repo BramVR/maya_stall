@@ -79,6 +79,18 @@ func TestWindowsDesktopScreenshotTranscodesHostJPEGToPNG(t *testing.T) {
 	}
 }
 
+func TestSSHWindowsDesktopTransportStreamsLongPowerShellOverStdin(t *testing.T) {
+	script := windowsDesktopScreenshotPowerShell("C:/maya-stall/runs/run-123/visual-evidence/screenshot")
+	encoded := strings.Join(encodedPowerShellCommand(script), " ")
+	if len(encoded) < 8000 {
+		t.Fatalf("desktop screenshot encoded command length = %d, want proof it leaves unsafe headroom under the Windows default-shell command-line limit", len(encoded))
+	}
+	command := strings.Join(windowsPowerShellStdinCommand(), " ")
+	if !strings.Contains(command, "-Command -") || strings.Contains(command, "-EncodedCommand") {
+		t.Fatalf("SSH desktop PowerShell command must read the script from stdin: %s", command)
+	}
+}
+
 func validJPEGBytes(t *testing.T) []byte {
 	t.Helper()
 	var output bytes.Buffer

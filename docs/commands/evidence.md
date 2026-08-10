@@ -58,10 +58,12 @@ The fake broker supports configured Visual Evidence. With
 interactive Windows scheduled task to capture the visible desktop session that
 owns Maya. On real Windows Maya Hosts, both screenshots and recording frames
 cover the full Windows virtual desktop across attached monitors rather than
-only the primary screen. SSH screenshot capture uses a transient JPEG on the
-Windows Host, then transcodes it on the controller so the Evidence artifact
-remains PNG without doing lossless compression beside Maya. Recording uses 10
-seconds at 15 fps by default and is encoded locally with `ffmpeg`.
+only the primary screen. SSH screenshot capture streams its PowerShell program
+over stdin so it does not depend on the Windows default-shell command-line
+limit, uses a transient JPEG on the Windows Host, then transcodes it on the
+controller so the Evidence artifact remains PNG without doing lossless
+compression beside Maya. Recording uses 10 seconds at 15 fps by default and is
+encoded locally with `ffmpeg`.
 
 ## publish
 

@@ -31,7 +31,11 @@ type localWindowsDesktopTransport struct {
 var lookPath = exec.LookPath
 
 func (transport sshWindowsDesktopTransport) RunPowerShell(script string, timeout time.Duration) ([]byte, error) {
-	return runSSHCommandOutput(mayaHostConfig(transport), encodedPowerShellCommand(script), timeout)
+	return runSSHCommandOutputWithInput(mayaHostConfig(transport), windowsPowerShellStdinCommand(), script, timeout)
+}
+
+func windowsPowerShellStdinCommand() []string {
+	return []string{"powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"}
 }
 
 func (transport sshWindowsDesktopTransport) WritePowerShellScript(remotePath string, content string, timeout time.Duration) error {
