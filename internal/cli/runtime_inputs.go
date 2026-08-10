@@ -46,7 +46,7 @@ func snapshotDeclaredRuntimeInputs(context runContext, declarations map[string]r
 			return nil, err
 		}
 		if err := copyFile(source, destination); err != nil {
-			return nil, fmt.Errorf("runtime input %q could not be snapshotted", entry.Name)
+			return nil, fmt.Errorf("%s", stableRuntimeInputSnapshotError(entry.Name, err))
 		}
 		snapshotSize, snapshotHash, err := summarizePlanPayload(destination)
 		if err != nil {
@@ -231,4 +231,17 @@ func stableRuntimeInputError(name string, err error) string {
 		return fmt.Sprintf("runtime input %q %s", name, message)
 	}
 	return fmt.Sprintf("runtime input %q file could not be inspected", name)
+}
+
+func stableRuntimeInputSnapshotError(name string, err error) string {
+	if os.IsNotExist(err) {
+		return fmt.Sprintf("runtime input %q file disappeared before it could be snapshotted", name)
+	}
+	if os.IsPermission(err) {
+		return fmt.Sprintf("runtime input %q file could not be read or snapshotted due to permissions", name)
+	}
+	if os.IsExist(err) {
+		return fmt.Sprintf("runtime input %q snapshot destination already exists", name)
+	}
+	return fmt.Sprintf("runtime input %q could not be snapshotted", name)
 }

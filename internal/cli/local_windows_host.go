@@ -50,7 +50,7 @@ func (host localWindowsHost) StagePayload(context runContext, payload []manifest
 			return err
 		}
 		if err := copyPath(context.RunWorkspace.LocalPayloadPath(item), destination); err != nil {
-			return fmt.Errorf("stage %s payload %q locally: %w", item.Kind, item.Name+item.Source, err)
+			return fmt.Errorf("stage %s payload %q locally: %w", item.Kind, item.stageLabel(), err)
 		}
 	}
 	return nil

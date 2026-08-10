@@ -176,6 +176,13 @@ type manifestPayload struct {
 	SHA256 string `json:"sha256,omitempty"`
 }
 
+func (item manifestPayload) stageLabel() string {
+	if item.Name != "" {
+		return item.Name
+	}
+	return item.Source
+}
+
 type manifestPayloadDeclaration struct {
 	Kind   string
 	Source string

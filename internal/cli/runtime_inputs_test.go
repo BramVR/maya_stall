@@ -5,12 +5,49 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestManifestPayloadStageLabelPrefersRuntimeInputName(t *testing.T) {
+	item := manifestPayload{Name: "character", Source: "private/source.ma"}
+	if got := item.stageLabel(); got != "character" {
+		t.Fatalf("stage label = %q, want runtime input name", got)
+	}
+	item.Name = ""
+	if got := item.stageLabel(); got != "private/source.ma" {
+		t.Fatalf("stage label = %q, want repository payload source", got)
+	}
+}
+
+func TestRuntimeInputSnapshotErrorsUseStablePathPrivateDiagnostics(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "missing", err: fs.ErrNotExist, want: `runtime input "character" file disappeared before it could be snapshotted`},
+		{name: "permission", err: fs.ErrPermission, want: `runtime input "character" file could not be read or snapshotted due to permissions`},
+		{name: "destination exists", err: fs.ErrExist, want: `runtime input "character" snapshot destination already exists`},
+		{name: "other", err: fs.ErrInvalid, want: `runtime input "character" could not be snapshotted`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &os.PathError{Op: "copy", Path: `C:\private\customer\character.ma`, Err: tt.err}
+			got := stableRuntimeInputSnapshotError("character", err)
+			if got != tt.want {
+				t.Fatalf("snapshot error = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(got, "private") || strings.Contains(got, "customer") {
+				t.Fatalf("snapshot error exposed private source path: %q", got)
+			}
+		})
+	}
+}
 
 func TestPlanNormalizesDeclaredRuntimeFileInputWithoutCreatingRunState(t *testing.T) {
 	dir := t.TempDir()

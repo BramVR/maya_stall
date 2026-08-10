@@ -270,7 +270,7 @@ func validatePayloadSnapshotForStage(context runContext, payload []manifestPaylo
 			return fmt.Errorf("stage %s payload has unsafe staged path %q", item.Kind, item.Staged)
 		}
 		if err := validatePayloadPathForTransport(context.RunWorkspace.LocalPayloadRoot(), filepath.ToSlash(relative)); err != nil {
-			return fmt.Errorf("stage %s payload %s: %w", item.Kind, item.Name+item.Source, err)
+			return fmt.Errorf("stage %s payload %q: %w", item.Kind, item.stageLabel(), err)
 		}
 		if item.SHA256 != "" {
 			size, hash, err := summarizePlanPayload(context.RunWorkspace.LocalPayloadPath(item))
