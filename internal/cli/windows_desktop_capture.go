@@ -349,11 +349,21 @@ public static class MouseInput {
     public MOUSEINPUT mi;
   }
   [DllImport("user32.dll", SetLastError = true)]
-  public static extern bool SetCursorPos(int X, int Y);
+  public static extern int GetSystemMetrics(int index);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern uint SendInput(uint inputCount, INPUT[] inputs, int inputSize);
-  public static void Click() {
+  public static void MoveAndClick(int x, int y) {
+    int left = GetSystemMetrics(76);
+    int top = GetSystemMetrics(77);
+    int width = GetSystemMetrics(78);
+    int height = GetSystemMetrics(79);
+    if (width <= 1 || height <= 1 || x < left || x >= left + width || y < top || y >= top + height) {
+      throw new InvalidOperationException("desktop click coordinates are outside the interactive virtual screen");
+    }
+    int absoluteX = (int)(((long)(x - left) * 65535L) / (width - 1));
+    int absoluteY = (int)(((long)(y - top) * 65535L) / (height - 1));
     INPUT[] inputs = new INPUT[] {
+      new INPUT { type = 0, mi = new MOUSEINPUT { dx = absoluteX, dy = absoluteY, dwFlags = 0xC001 } },
       new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = 0x0002 } },
       new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = 0x0004 } }
     };
@@ -365,9 +375,7 @@ public static class MouseInput {
 }
 "@
 Add-Type -TypeDefinition $source
-if (-not [MouseInput]::SetCursorPos(%d, %d)) { throw "SetCursorPos failed; interactive desktop session is unavailable for desktop control" }
-Start-Sleep -Milliseconds 50
-[MouseInput]::Click()
+[MouseInput]::MoveAndClick(%d, %d)
 Set-Content -LiteralPath "__MAYA_STALL_CLICK_DONE__" -Value "ok"
 '@
 try {

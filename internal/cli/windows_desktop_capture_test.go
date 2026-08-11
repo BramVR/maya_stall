@@ -177,7 +177,9 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndSendInput(t *testing.
 		"/IT",
 		"LIMITED",
 		"user32.dll",
-		"SetCursorPos(12, 34)",
+		"MoveAndClick(12, 34)",
+		"GetSystemMetrics(76)",
+		"dwFlags = 0xC001",
 		"SendInput",
 		"inserted != (uint)inputs.Length",
 		"$deadline = (Get-Date).AddSeconds(30)",
@@ -194,6 +196,9 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndSendInput(t *testing.
 	}
 	if strings.Contains(combined, "mouse_event") {
 		t.Fatalf("desktop click must use one serial SendInput batch instead of superseded mouse_event calls:\n%s", combined)
+	}
+	if strings.Contains(combined, "SetCursorPos") {
+		t.Fatalf("desktop click must atomically move and click in one SendInput batch:\n%s", combined)
 	}
 }
 
