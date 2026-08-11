@@ -326,12 +326,15 @@ New-Item -ItemType Directory -Force -Path $root | Out-Null
 if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) { throw "schtasks.exe is required for interactive desktop control" }
 $taskName = "MayaStallDesktopClick-" + [Guid]::NewGuid().ToString("N")
 $done = Join-Path $root "desktop-click.done"
+$failed = Join-Path $root "desktop-click.failed"
 $script = Join-Path $root ($taskName + ".ps1")
 $template = @'
 $ErrorActionPreference = "Stop"
+try {
 $source = @"
 using System;
 using System.ComponentModel;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class MouseInput {
@@ -358,18 +361,8 @@ public static class MouseInput {
   public static extern int GetSystemMetrics(int index);
   [DllImport("user32.dll")]
   public static extern IntPtr WindowFromPoint(POINT point);
-  [DllImport("user32.dll")]
-  public static extern IntPtr GetAncestor(IntPtr window, uint flags);
-  [DllImport("user32.dll")]
-  public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")]
-  [return: MarshalAs(UnmanagedType.Bool)]
-  public static extern bool SetForegroundWindow(IntPtr window);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
-  [DllImport("user32.dll", SetLastError = true)]
-  [return: MarshalAs(UnmanagedType.Bool)]
-  public static extern bool PostMessage(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern uint SendInput(uint inputCount, INPUT[] inputs, int inputSize);
   public static bool TryInvokeButtonAt(int x, int y) {
@@ -377,12 +370,16 @@ public static class MouseInput {
     if (target == IntPtr.Zero) return false;
     StringBuilder className = new StringBuilder(256);
     if (GetClassName(target, className, className.Capacity) <= 0 || className.ToString().IndexOf("BUTTON", StringComparison.OrdinalIgnoreCase) < 0) return false;
-    IntPtr root = GetAncestor(target, 2);
-    if (root == IntPtr.Zero) return false;
-    if (GetForegroundWindow() != root && (!SetForegroundWindow(root) || GetForegroundWindow() != root)) return false;
-    if (!PostMessage(target, 0x00F5, UIntPtr.Zero, IntPtr.Zero)) {
-      throw new Win32Exception(Marshal.GetLastWin32Error(), "button click could not be queued for desktop control");
-    }
+    Assembly automation = Assembly.Load("UIAutomationClient, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35");
+    Type elementType = automation.GetType("System.Windows.Automation.AutomationElement", true);
+    Type invokePatternType = automation.GetType("System.Windows.Automation.InvokePattern", true);
+    object element = elementType.GetMethod("FromHandle", BindingFlags.Public | BindingFlags.Static).Invoke(null, new object[] { target });
+    if (element == null) throw new InvalidOperationException("UI Automation could not resolve the desktop control button");
+    object pattern = invokePatternType.GetField("Pattern", BindingFlags.Public | BindingFlags.Static).GetValue(null);
+    object[] patternArguments = new object[] { pattern, null };
+    bool supported = (bool)elementType.GetMethod("TryGetCurrentPattern").Invoke(element, patternArguments);
+    if (!supported || patternArguments[1] == null) throw new InvalidOperationException("desktop control button does not support UI Automation InvokePattern");
+    invokePatternType.GetMethod("Invoke", BindingFlags.Public | BindingFlags.Instance).Invoke(patternArguments[1], null);
     return true;
   }
   public static void ClickAt(int x, int y) {
@@ -411,9 +408,13 @@ public static class MouseInput {
 Add-Type -TypeDefinition $source
 [MouseInput]::ClickAt(%d, %d)
 Set-Content -LiteralPath "__MAYA_STALL_CLICK_DONE__" -Value "ok"
+} catch {
+  Set-Content -LiteralPath "__MAYA_STALL_CLICK_FAILED__" -Value $_.Exception.ToString()
+  exit 1
+}
 '@
 try {
-  $template.Replace("__MAYA_STALL_CLICK_DONE__", $done.Replace("\", "\\")) | Set-Content -Encoding ASCII -LiteralPath $script
+  $template.Replace("__MAYA_STALL_CLICK_DONE__", $done.Replace("\", "\\")).Replace("__MAYA_STALL_CLICK_FAILED__", $failed.Replace("\", "\\")) | Set-Content -Encoding ASCII -LiteralPath $script
   cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
   $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
   $taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
@@ -423,6 +424,7 @@ try {
   schtasks.exe /Run /TN $taskName | Out-Null
   $deadline = (Get-Date).AddSeconds(30)
   while ((Get-Date) -lt $deadline) {
+    if (Test-Path -LiteralPath $failed) { throw "scheduled interactive desktop click failed: $(Get-Content -LiteralPath $failed -Raw)" }
     if (Test-Path -LiteralPath $done) { exit 0 }
     Start-Sleep -Milliseconds 250
   }
