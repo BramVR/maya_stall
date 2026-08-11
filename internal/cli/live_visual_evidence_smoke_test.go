@@ -81,6 +81,7 @@ func TestOptInRealDesktopControlModalSmoke(t *testing.T) {
 	screenshot := requireLiveDesktopControlScreenshotArtifact(t, evidenceDir, bundle)
 	assertLiveDesktopControlScreenshotShowsModal(t, evidenceDir, screenshot)
 
+	prepareLiveDesktopControlModalClick(t, host, fixture)
 	var stdout, stderr bytes.Buffer
 	code := Run(options.controlClickArgs(fixture.ClickX, fixture.ClickY), &stdout, &stderr, dir, "test-version")
 	if code != 0 {
@@ -163,6 +164,7 @@ func TestOptInRealRunScopedDesktopOpsSmoke(t *testing.T) {
 	screenshot := requireLiveRunScopedScreenshotArtifact(t, evidenceDir, bundle)
 	assertLiveDesktopControlScreenshotShowsModal(t, evidenceDir, screenshot)
 
+	prepareLiveDesktopControlModalClick(t, host, fixture)
 	var controlStdout, controlStderr bytes.Buffer
 	controlCode := Run([]string{"attach", runID, "control", "click", "--x", strconv.Itoa(fixture.ClickX), "--y", strconv.Itoa(fixture.ClickY)}, &controlStdout, &controlStderr, dir, "test-version")
 	if controlCode != 0 {
@@ -584,10 +586,12 @@ func TestWindowsDesktopCaptureCommandsUseInteractiveDesktop(t *testing.T) {
 
 func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 	fixture := liveDesktopControlModalFixture{
-		RemoteRoot: "C:/maya-stall/artifacts/modal-proof",
-		TaskName:   "MayaStallDesktopControlModal-proof",
-		ClickX:     300,
-		ClickY:     251,
+		RemoteRoot:   "C:/maya-stall/artifacts/modal-proof",
+		TaskName:     "MayaStallDesktopControlModal-proof",
+		ClickX:       300,
+		ClickY:       251,
+		ProcessID:    42,
+		WindowHandle: 84,
 	}
 	launch := liveDesktopControlModalFixturePowerShell(fixture)
 	for _, want := range []string{
@@ -601,6 +605,8 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 		"FormBorderStyle = \"None\"",
 		"FromArgb(255, 0, 255)",
 		"PointToScreen",
+		"WorkingArea",
+		"windowHandle",
 	} {
 		if !strings.Contains(launch, want) {
 			t.Fatalf("modal fixture launch missing %q:\n%s", want, launch)
@@ -611,6 +617,13 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 	for _, want := range []string{"schtasks.exe /Delete", "Stop-Process", "Remove-Item -Recurse -Force"} {
 		if !strings.Contains(cleanup, want) {
 			t.Fatalf("modal fixture cleanup missing %q:\n%s", want, cleanup)
+		}
+	}
+
+	target := liveDesktopControlModalTargetPowerShell(fixture)
+	for _, want := range []string{"SetWindowPos", "WindowFromPoint", "$expectedPID = 42", "expected window handle 84", "/IT", "LIMITED"} {
+		if !strings.Contains(target, want) {
+			t.Fatalf("modal fixture target preparation missing %q:\n%s", want, target)
 		}
 	}
 }
@@ -838,8 +851,6 @@ func liveDesktopControlScreenshotArtifact(bundle evidenceBundle) (visualEvidence
 }
 
 const (
-	liveDesktopControlModalLeft    = 120
-	liveDesktopControlModalTop     = 120
 	liveDesktopControlModalButton  = 130
 	liveDesktopControlModalClickX  = 300
 	liveDesktopControlModalClickY  = 251
@@ -851,10 +862,12 @@ const (
 )
 
 type liveDesktopControlModalFixture struct {
-	RemoteRoot string
-	TaskName   string
-	ClickX     int
-	ClickY     int
+	RemoteRoot   string
+	TaskName     string
+	ClickX       int
+	ClickY       int
+	ProcessID    int
+	WindowHandle int64
 }
 
 func launchLiveDesktopControlModalFixture(t *testing.T, host mayaHostConfig) liveDesktopControlModalFixture {
@@ -881,17 +894,29 @@ func launchLiveDesktopControlModalFixture(t *testing.T, host mayaHostConfig) liv
 		t.Fatalf("launch live desktop control modal fixture: %v: %s", err, strings.TrimSpace(string(raw)))
 	}
 	var shown struct {
-		Status string `json:"status"`
-		ClickX int    `json:"clickX"`
-		ClickY int    `json:"clickY"`
+		Status       string `json:"status"`
+		ClickX       int    `json:"clickX"`
+		ClickY       int    `json:"clickY"`
+		ProcessID    int    `json:"pid"`
+		WindowHandle int64  `json:"windowHandle"`
 	}
-	if err := json.Unmarshal(trimToJSON(raw), &shown); err != nil || shown.Status != "shown" || shown.ClickX < 0 || shown.ClickY < 0 {
+	if err := json.Unmarshal(trimToJSON(raw), &shown); err != nil || shown.Status != "shown" || shown.ClickX < 0 || shown.ClickY < 0 || shown.ProcessID <= 0 || shown.WindowHandle <= 0 {
 		_, _ = runSSHCommandOutput(host, encodedPowerShellCommand(liveDesktopControlModalCleanupPowerShell(fixture)), sessiondCommandTimeout)
 		t.Fatalf("live desktop control modal fixture did not report a screen-space click target: %s", strings.TrimSpace(string(raw)))
 	}
 	fixture.ClickX = shown.ClickX
 	fixture.ClickY = shown.ClickY
+	fixture.ProcessID = shown.ProcessID
+	fixture.WindowHandle = shown.WindowHandle
 	return fixture
+}
+
+func prepareLiveDesktopControlModalClick(t *testing.T, host mayaHostConfig, fixture liveDesktopControlModalFixture) {
+	t.Helper()
+	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(liveDesktopControlModalTargetPowerShell(fixture)), sessiondCommandTimeout)
+	if err != nil {
+		t.Fatalf("prepare owned live desktop control modal click target: %v: %s", err, strings.TrimSpace(string(raw)))
+	}
 }
 
 func waitForLiveDesktopControlModalClosed(t *testing.T, host mayaHostConfig, fixture liveDesktopControlModalFixture) {
@@ -1064,8 +1089,14 @@ $form = New-Object System.Windows.Forms.Form
 $form.FormBorderStyle = "None"
 $form.TopMost = $true
 $form.StartPosition = "Manual"
-$form.Location = New-Object System.Drawing.Point(%d, %d)
 $form.Size = New-Object System.Drawing.Size(420, 220)
+$workingArea = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$horizontalSpan = [Math]::Max(1, $workingArea.Width - $form.Width - 48)
+$verticalSpan = [Math]::Max(1, $workingArea.Height - $form.Height - 48)
+$seed = [Math]::Abs([int64]$PID)
+$left = $workingArea.Left + 24 + [int]($seed %% $horizontalSpan)
+$top = $workingArea.Top + 24 + [int](($seed * 37) %% $verticalSpan)
+$form.Location = New-Object System.Drawing.Point($left, $top)
 $form.BackColor = [System.Drawing.Color]::FromArgb(255, 0, 255)
 $label = New-Object System.Windows.Forms.Label
 $label.AutoSize = $false
@@ -1091,7 +1122,10 @@ $button.Add_Click({
 $form.Controls.Add($button)
 $form.Add_Shown({
   $center = $button.PointToScreen([System.Drawing.Point]::new([int]($button.Width / 2), [int]($button.Height / 2)))
-  [pscustomobject]@{ status = "shown"; clickX = $center.X; clickY = $center.Y } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_SHOWN__"
+  $form.Activate()
+  $form.BringToFront()
+  $button.Focus() | Out-Null
+  [pscustomobject]@{ status = "shown"; clickX = $center.X; clickY = $center.Y; pid = $PID; windowHandle = [int64]$form.Handle } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_SHOWN__"
 })
 [void]$form.ShowDialog()
 '@
@@ -1114,9 +1148,87 @@ for ($i = 0; $i -lt 40; $i++) {
 throw "scheduled interactive desktop control modal did not appear; ensure an interactive desktop session is logged in"`,
 		powerShellSingleQuoted(fixture.RemoteRoot),
 		powerShellSingleQuoted(fixture.TaskName),
-		liveDesktopControlModalLeft,
-		liveDesktopControlModalTop,
 		liveDesktopControlModalButton,
+	)
+}
+
+func liveDesktopControlModalTargetPowerShell(fixture liveDesktopControlModalFixture) string {
+	return fmt.Sprintf(`$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+$root = %s
+$taskName = %s
+$result = Join-Path $root "desktop-control-modal.target.json"
+$script = Join-Path $root "desktop-control-modal-target.ps1"
+$template = @'
+$ErrorActionPreference = "Stop"
+try {
+  $expectedPID = %d
+  $expectedWindow = [IntPtr]%d
+  if (-not (Get-Process -Id $expectedPID -ErrorAction SilentlyContinue)) { throw "owned desktop control modal process is not alive for expected PID $expectedPID" }
+  $source = @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class MayaStallModalTarget {
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [DllImport("user32.dll", SetLastError = true)] static extern bool SetWindowPos(IntPtr handle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr handle);
+  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT point);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
+  public static uint ActivateAndVerify(IntPtr window, int x, int y) {
+    if (!SetWindowPos(window, new IntPtr(-1), 0, 0, 0, 0, 0x0043)) throw new Win32Exception(Marshal.GetLastWin32Error(), "SetWindowPos failed for owned modal");
+    SetForegroundWindow(window);
+    System.Threading.Thread.Sleep(200);
+    POINT point = new POINT { X = x, Y = y };
+    IntPtr target = WindowFromPoint(point);
+    uint processId;
+    GetWindowThreadProcessId(target, out processId);
+    return processId;
+  }
+}
+"@
+  Add-Type -TypeDefinition $source
+  $targetPID = [MayaStallModalTarget]::ActivateAndVerify($expectedWindow, %d, %d)
+  if ($targetPID -ne $expectedPID) { throw "desktop click target PID $targetPID does not match owned modal expected PID $expectedPID at (%d,%d) and expected window handle %d" }
+  [pscustomobject]@{ status = "ready"; targetPID = $targetPID } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_TARGET_RESULT__"
+} catch {
+  [pscustomobject]@{ status = "error"; detail = $_.Exception.Message } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_TARGET_RESULT__"
+  exit 1
+}
+'@
+$template.Replace("__MAYA_STALL_MODAL_TARGET_RESULT__", $result.Replace("\", "\\")) | Set-Content -Encoding ASCII -LiteralPath $script
+cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
+$startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
+$taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
+$createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "LIMITED", "/IT", "/F")
+try {
+  & schtasks.exe @createArgs | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "failed to create interactive owned-modal target task with schtasks.exe /IT" }
+  schtasks.exe /Run /TN $taskName | Out-Null
+  for ($i = 0; $i -lt 40; $i++) {
+    if (Test-Path -LiteralPath $result) {
+      $target = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+      if ($target.status -ne "ready") { throw $target.detail }
+      Write-Output "owned modal target ready"
+      exit 0
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  throw "scheduled interactive owned-modal target check did not complete"
+} finally {
+  schtasks.exe /Delete /TN $taskName /F 2>$null | Out-Null
+  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $result -Force -ErrorAction SilentlyContinue
+}`,
+		powerShellSingleQuoted(fixture.RemoteRoot),
+		powerShellSingleQuoted(fixture.TaskName+"-Target"),
+		fixture.ProcessID,
+		fixture.WindowHandle,
+		fixture.ClickX,
+		fixture.ClickY,
+		fixture.ClickX,
+		fixture.ClickY,
+		fixture.WindowHandle,
 	)
 }
 

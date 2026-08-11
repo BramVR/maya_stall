@@ -331,45 +331,20 @@ $template = @'
 $ErrorActionPreference = "Stop"
 $source = @"
 using System;
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class MouseInput {
-  [StructLayout(LayoutKind.Sequential)]
-  public struct INPUT {
-    public uint type;
-    public MOUSEINPUT mi;
-  }
-  [StructLayout(LayoutKind.Sequential)]
-  public struct MOUSEINPUT {
-    public int dx;
-    public int dy;
-    public uint mouseData;
-    public uint dwFlags;
-    public uint time;
-    public UIntPtr dwExtraInfo;
-  }
   [DllImport("user32.dll", SetLastError = true)]
   public static extern bool SetCursorPos(int X, int Y);
   [DllImport("user32.dll", SetLastError = true)]
-  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-  public static void Click(int x, int y) {
-    if (!SetCursorPos(x, y)) {
-      throw new Win32Exception(Marshal.GetLastWin32Error(), "SetCursorPos failed; interactive desktop session is unavailable for desktop control");
-    }
-    INPUT[] inputs = new INPUT[2];
-    inputs[0].type = 0;
-    inputs[0].mi.dwFlags = 0x0002;
-    inputs[1].type = 0;
-    inputs[1].mi.dwFlags = 0x0004;
-    uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
-    if (sent != (uint)inputs.Length) {
-      throw new Win32Exception(Marshal.GetLastWin32Error(), "SendInput failed to insert desktop click events");
-    }
-  }
+  public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, UIntPtr dwExtraInfo);
 }
 "@
 Add-Type -TypeDefinition $source
-[MouseInput]::Click(%d, %d)
+if (-not [MouseInput]::SetCursorPos(%d, %d)) { throw "SetCursorPos failed; interactive desktop session is unavailable for desktop control" }
+Start-Sleep -Milliseconds 50
+[MouseInput]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+Start-Sleep -Milliseconds 50
+[MouseInput]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
 Set-Content -LiteralPath "__MAYA_STALL_CLICK_DONE__" -Value "ok"
 '@
 try {

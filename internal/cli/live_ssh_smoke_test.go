@@ -380,6 +380,11 @@ func runKLVPushConsumingRepoSmoke(t *testing.T, options realSSHSmokeOptions) {
 	doctorOptions := options.doctorOptions()
 	doctorOptions.ScenarioName = "klv-push-smoke"
 	report := runDoctor(dir, doctorOptions)
+	if liveHostHealthHasOnlyTransientSSHTimeout(report) {
+		t.Logf("retrying consuming-repo Host Health once after transient SSH timeout: %s", formatHostHealthReport(report))
+		time.Sleep(2 * time.Second)
+		report = runDoctor(dir, doctorOptions)
+	}
 	assertLiveHostHealthProof(t, report)
 	t.Logf("Host Health: %s", formatHostHealthReport(report))
 
@@ -416,6 +421,46 @@ func runKLVPushConsumingRepoSmoke(t *testing.T, options realSSHSmokeOptions) {
 	}
 	if !strings.Contains(publishStdout.String(), "url: https://evidence.example.invalid/maya-stall/") {
 		t.Fatalf("evidence publish did not print review-ready URL:\n%s", publishStdout.String())
+	}
+}
+
+func liveHostHealthHasOnlyTransientSSHTimeout(report hostHealthReport) bool {
+	if report.Healthy {
+		return false
+	}
+	lockClear := false
+	timedOut := false
+	for _, layer := range report.Layers {
+		if layer.ID == "host-lock" {
+			lockClear = layer.Status == "ok" && layer.State == "unlocked"
+		}
+		if layer.Status != "fail" {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(layer.Detail), "ssh command timed out") {
+			return false
+		}
+		timedOut = true
+	}
+	return lockClear && timedOut
+}
+
+func TestLiveHostHealthTransientSSHTimeoutRetryScope(t *testing.T) {
+	report := hostHealthReport{Layers: []hostHealthLayer{
+		{ID: "host-lock", Status: "ok", State: "unlocked"},
+		{ID: "session-broker", Status: "fail", Detail: "ssh command timed out after 30s"},
+	}}
+	if !liveHostHealthHasOnlyTransientSSHTimeout(report) {
+		t.Fatal("an unlocked host with only SSH timeout failures should receive one bounded retry")
+	}
+	report.Layers[1].Detail = "authentication failed"
+	if liveHostHealthHasOnlyTransientSSHTimeout(report) {
+		t.Fatal("non-timeout health failures must not be retried")
+	}
+	report.Layers[1].Detail = "ssh command timed out after 30s"
+	report.Layers[0].State = "locked"
+	if liveHostHealthHasOnlyTransientSSHTimeout(report) {
+		t.Fatal("a non-clear Host Lock must never be retried as transient SSH transport")
 	}
 }
 
