@@ -624,7 +624,7 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 	}
 
 	target := liveDesktopControlModalTargetPowerShell(fixture)
-	for _, want := range []string{"SetWindowPos", "GetWindowRect", "WindowFromPoint", "KeepOnTop", "$expectedPID = 42", "$expectedWindow = [IntPtr]84", "$expectedButton = [IntPtr]126", "targetWindow", "desktop-control-modal.closed", "$keepTargetTask = $true", "/IT", "LIMITED", `status = "error"`, "$outcome | ConvertTo-Json -Compress"} {
+	for _, want := range []string{"SetWindowPos", "GetWindowRect", "WindowFromPoint", "KeepTargetable", "$expectedPID = 42", "$expectedWindow = [IntPtr]84", "$expectedButton = [IntPtr]126", "targetWindow", "desktop-control-modal.closed", "$keepTargetTask = $true", "/IT", "LIMITED", `status = "error"`, "$outcome | ConvertTo-Json -Compress"} {
 		if !strings.Contains(target, want) {
 			t.Fatalf("modal fixture target preparation missing %q:\n%s", want, target)
 		}
@@ -1210,8 +1210,13 @@ public static class MayaStallModalTarget {
   [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT point);
   [DllImport("user32.dll", SetLastError = true)] static extern bool GetWindowRect(IntPtr handle, out RECT rect);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
-  public static void KeepOnTop(IntPtr window) {
+  public static bool KeepTargetable(IntPtr window, IntPtr button, int x, int y) {
+    POINT point = new POINT { X = x, Y = y };
+    if (WindowFromPoint(point) == button) return true;
     if (!SetWindowPos(window, new IntPtr(-1), 0, 0, 0, 0, 0x0013)) throw new Win32Exception(Marshal.GetLastWin32Error(), "SetWindowPos failed while guarding owned modal");
+    SetForegroundWindow(window);
+    System.Threading.Thread.Sleep(100);
+    return WindowFromPoint(point) == button;
   }
   public static uint ActivateAndVerify(IntPtr window, IntPtr button, out int x, out int y, out long targetWindow) {
     if (!SetWindowPos(window, new IntPtr(-1), 0, 0, 0, 0, 0x0043)) throw new Win32Exception(Marshal.GetLastWin32Error(), "SetWindowPos failed for owned modal");
@@ -1239,7 +1244,7 @@ public static class MayaStallModalTarget {
   [pscustomobject]@{ status = "ready"; targetPID = $targetPID; targetWindow = $targetWindow; clickX = $clickX; clickY = $clickY } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_TARGET_RESULT__"
   for ($i = 0; $i -lt 300; $i++) {
     if (Test-Path -LiteralPath "__MAYA_STALL_MODAL_CLOSED__") { exit 0 }
-    [MayaStallModalTarget]::KeepOnTop($expectedWindow)
+    if (-not [MayaStallModalTarget]::KeepTargetable($expectedWindow, $expectedButton, $clickX, $clickY)) { throw "owned modal button became untargetable at ($clickX,$clickY)" }
     Start-Sleep -Milliseconds 50
   }
 } catch {
