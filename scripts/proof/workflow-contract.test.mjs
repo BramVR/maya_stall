@@ -60,8 +60,8 @@ test("one same-repository live job is serialized behind verified hosted gates", 
 
 test("all nine live smokes run serially in one bounded Go test process", () => {
   assert.equal((required.match(/go test -json \.\/internal\/cli -run/g) ?? []).length, 1);
-	assert.match(required, /-parallel=1 -timeout=30m/);
-	assert.match(required, /live_maya:[\s\S]*?timeout-minutes: 40/);
+  assert.match(required, /-parallel=1 -timeout=45m/);
+  assert.match(required, /live_maya:[\s\S]*?timeout-minutes: 55/);
   assert.match(required, /go clean -cache -testcache/);
   assert.doesNotMatch(required, /extra_policy\[@\]/);
   for (const name of [
