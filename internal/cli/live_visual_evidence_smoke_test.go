@@ -600,6 +600,7 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 		"desktop-control-modal.closed",
 		"FormBorderStyle = \"None\"",
 		"FromArgb(255, 0, 255)",
+		"PointToScreen",
 	} {
 		if !strings.Contains(launch, want) {
 			t.Fatalf("modal fixture launch missing %q:\n%s", want, launch)
@@ -879,10 +880,17 @@ func launchLiveDesktopControlModalFixture(t *testing.T, host mayaHostConfig) liv
 		_, _ = runSSHCommandOutput(host, encodedPowerShellCommand(liveDesktopControlModalCleanupPowerShell(fixture)), sessiondCommandTimeout)
 		t.Fatalf("launch live desktop control modal fixture: %v: %s", err, strings.TrimSpace(string(raw)))
 	}
-	if !strings.Contains(string(raw), "shown") {
-		_, _ = runSSHCommandOutput(host, encodedPowerShellCommand(liveDesktopControlModalCleanupPowerShell(fixture)), sessiondCommandTimeout)
-		t.Fatalf("live desktop control modal fixture did not report shown: %s", strings.TrimSpace(string(raw)))
+	var shown struct {
+		Status string `json:"status"`
+		ClickX int    `json:"clickX"`
+		ClickY int    `json:"clickY"`
 	}
+	if err := json.Unmarshal(trimToJSON(raw), &shown); err != nil || shown.Status != "shown" || shown.ClickX < 0 || shown.ClickY < 0 {
+		_, _ = runSSHCommandOutput(host, encodedPowerShellCommand(liveDesktopControlModalCleanupPowerShell(fixture)), sessiondCommandTimeout)
+		t.Fatalf("live desktop control modal fixture did not report a screen-space click target: %s", strings.TrimSpace(string(raw)))
+	}
+	fixture.ClickX = shown.ClickX
+	fixture.ClickY = shown.ClickY
 	return fixture
 }
 
@@ -1082,7 +1090,8 @@ $button.Add_Click({
 })
 $form.Controls.Add($button)
 $form.Add_Shown({
-  Set-Content -LiteralPath "__MAYA_STALL_MODAL_SHOWN__" -Value "shown"
+  $center = $button.PointToScreen([System.Drawing.Point]::new([int]($button.Width / 2), [int]($button.Height / 2)))
+  [pscustomobject]@{ status = "shown"; clickX = $center.X; clickY = $center.Y } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_SHOWN__"
 })
 [void]$form.ShowDialog()
 '@
@@ -1097,7 +1106,7 @@ if ($LASTEXITCODE -ne 0) { throw "failed to create interactive desktop control m
 schtasks.exe /Run /TN $taskName | Out-Null
 for ($i = 0; $i -lt 40; $i++) {
   if (Test-Path -LiteralPath $shown) {
-    [pscustomobject]@{ status = "shown"; clickX = %d; clickY = %d } | ConvertTo-Json -Compress
+    Get-Content -LiteralPath $shown -Raw
     exit 0
   }
   Start-Sleep -Milliseconds 250
@@ -1108,8 +1117,6 @@ throw "scheduled interactive desktop control modal did not appear; ensure an int
 		liveDesktopControlModalLeft,
 		liveDesktopControlModalTop,
 		liveDesktopControlModalButton,
-		fixture.ClickX,
-		fixture.ClickY,
 	)
 }
 
