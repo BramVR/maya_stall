@@ -380,6 +380,10 @@ public static class MouseInput {
     bool supported = (bool)elementType.GetMethod("TryGetCurrentPattern").Invoke(element, patternArguments);
     if (!supported || patternArguments[1] == null) throw new InvalidOperationException("desktop control button does not support UI Automation InvokePattern");
     invokePatternType.GetMethod("Invoke", BindingFlags.Public | BindingFlags.Instance).Invoke(patternArguments[1], null);
+    // InvokePattern is asynchronous; keep the UIA client alive long enough for the provider to dispatch this one request.
+    System.Threading.Thread.Sleep(1000);
+    GC.KeepAlive(patternArguments[1]);
+    GC.KeepAlive(element);
     return true;
   }
   public static void ClickAt(int x, int y) {

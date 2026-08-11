@@ -183,6 +183,8 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskUIAutomationAndSendInput
 		"System.Windows.Automation.AutomationElement",
 		"System.Windows.Automation.InvokePattern",
 		"TryGetCurrentPattern",
+		"System.Threading.Thread.Sleep(1000)",
+		"GC.KeepAlive(patternArguments[1])",
 		"GetSystemMetrics(76)",
 		"dwFlags = 0xC001",
 		"SendInput",
