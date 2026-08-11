@@ -610,8 +610,7 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 		"PointToScreen",
 		"WorkingArea",
 		"windowHandle",
-		"Add_MouseDown",
-		"MouseButtons]::Left",
+		"Add_Click",
 	} {
 		if !strings.Contains(launch, want) {
 			t.Fatalf("modal fixture launch missing %q:\n%s", want, launch)
@@ -1148,9 +1147,7 @@ $button = New-Object System.Windows.Forms.Button
 $button.Text = "OK"
 $button.Location = New-Object System.Drawing.Point(%d, 110)
 $button.Size = New-Object System.Drawing.Size(100, 42)
-$button.Add_MouseDown({
-  param($sender, $eventArgs)
-  if ($eventArgs.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
+$button.Add_Click({
   Set-Content -LiteralPath "__MAYA_STALL_MODAL_CLOSED__" -Value "clicked"
   $form.Close()
 })

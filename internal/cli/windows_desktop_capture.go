@@ -331,20 +331,43 @@ $template = @'
 $ErrorActionPreference = "Stop"
 $source = @"
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class MouseInput {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT {
+    public uint type;
+    public MOUSEINPUT mi;
+  }
   [DllImport("user32.dll", SetLastError = true)]
   public static extern bool SetCursorPos(int X, int Y);
   [DllImport("user32.dll", SetLastError = true)]
-  public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, UIntPtr dwExtraInfo);
+  public static extern uint SendInput(uint inputCount, INPUT[] inputs, int inputSize);
+  public static void Click() {
+    INPUT[] inputs = new INPUT[] {
+      new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = 0x0002 } },
+      new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = 0x0004 } }
+    };
+    uint inserted = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
+    if (inserted != (uint)inputs.Length) {
+      throw new Win32Exception(Marshal.GetLastWin32Error(), "SendInput did not insert the complete desktop click");
+    }
+  }
 }
 "@
 Add-Type -TypeDefinition $source
 if (-not [MouseInput]::SetCursorPos(%d, %d)) { throw "SetCursorPos failed; interactive desktop session is unavailable for desktop control" }
 Start-Sleep -Milliseconds 50
-[MouseInput]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-Start-Sleep -Milliseconds 50
-[MouseInput]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+[MouseInput]::Click()
 Set-Content -LiteralPath "__MAYA_STALL_CLICK_DONE__" -Value "ok"
 '@
 try {

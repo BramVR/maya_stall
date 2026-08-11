@@ -8,7 +8,9 @@ import (
 	"image/color"
 	"image/jpeg"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -162,7 +164,7 @@ func TestWindowsDesktopCapturePreservesPowerShellPrerequisiteErrors(t *testing.T
 	}
 }
 
-func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndUser32(t *testing.T) {
+func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndSendInput(t *testing.T) {
 	transport := &fakeWindowsDesktopTransport{}
 
 	if err := clickWindowsDesktop(transport, "C:/maya-stall/artifacts/control", 12, 34); err != nil {
@@ -176,7 +178,8 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndUser32(t *testing.T) 
 		"LIMITED",
 		"user32.dll",
 		"SetCursorPos(12, 34)",
-		"mouse_event",
+		"SendInput",
+		"inserted != (uint)inputs.Length",
 		"$deadline = (Get-Date).AddSeconds(30)",
 		"while ((Get-Date) -lt $deadline)",
 		"Remove-Item -Recurse -Force",
@@ -188,6 +191,33 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndUser32(t *testing.T) 
 	}
 	if strings.Contains(combined, "HIGHEST") {
 		t.Fatalf("desktop click must not require an elevated scheduled task:\n%s", combined)
+	}
+	if strings.Contains(combined, "mouse_event") {
+		t.Fatalf("desktop click must use one serial SendInput batch instead of superseded mouse_event calls:\n%s", combined)
+	}
+}
+
+func TestWindowsDesktopClickSendInputSourceCompilesOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell Add-Type proof requires Windows")
+	}
+	script := windowsDesktopClickPowerShell("C:/maya-stall/artifacts/control", 12, 34)
+	const prefix = "$source = @\"\n"
+	const suffix = "\n\"@\nAdd-Type -TypeDefinition $source"
+	start := strings.Index(script, prefix)
+	if start < 0 {
+		t.Fatalf("desktop click command missing C# source prefix:\n%s", script)
+	}
+	start += len(prefix)
+	end := strings.Index(script[start:], suffix)
+	if end < 0 {
+		t.Fatalf("desktop click command missing C# source suffix:\n%s", script)
+	}
+	source := script[start : start+end]
+	command := "$ErrorActionPreference = 'Stop'\n$source = @'\n" + source + "\n'@\nAdd-Type -TypeDefinition $source"
+	output, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command).CombinedOutput()
+	if err != nil {
+		t.Fatalf("compile generated desktop click SendInput source: %v: %s", err, output)
 	}
 }
 
