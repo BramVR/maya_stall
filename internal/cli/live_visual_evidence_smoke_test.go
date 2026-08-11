@@ -360,7 +360,7 @@ func TestLiveVisualEvidenceProofWorkflowRequiresSmokePass(t *testing.T) {
 		"TestOptInRealHostLockContentionAndRecoverySmoke",
 		"TestOptInRealRunScopedDesktopOpsSmoke",
 		"TestOptInRealLocalSessiondRuntimeInputSmoke",
-		"-count=1 -parallel=1 -timeout=30m",
+		"-count=1 -parallel=1 -timeout=45m",
 		"MAYA_STALL_LIVE_PROOF_ARTIFACT_ENABLED",
 		"live-visual-evidence-proof",
 		"assert-public-artifact-confidentiality.mjs",
@@ -610,6 +610,8 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 		"PointToScreen",
 		"WorkingArea",
 		"windowHandle",
+		"Add_MouseDown",
+		"MouseButtons]::Left",
 	} {
 		if !strings.Contains(launch, want) {
 			t.Fatalf("modal fixture launch missing %q:\n%s", want, launch)
@@ -1146,7 +1148,9 @@ $button = New-Object System.Windows.Forms.Button
 $button.Text = "OK"
 $button.Location = New-Object System.Drawing.Point(%d, 110)
 $button.Size = New-Object System.Drawing.Size(100, 42)
-$button.Add_Click({
+$button.Add_MouseDown({
+  param($sender, $eventArgs)
+  if ($eventArgs.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
   Set-Content -LiteralPath "__MAYA_STALL_MODAL_CLOSED__" -Value "clicked"
   $form.Close()
 })

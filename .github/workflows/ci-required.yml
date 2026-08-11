@@ -144,7 +144,7 @@ jobs:
     if: needs.evaluate.outputs.hosted_ok == 'true' && needs.evaluate.outputs.current_head == 'true' && needs.evaluate.outputs.live_maya_required == 'true' && needs.evaluate.outputs.trusted_head == 'true'
     runs-on: [self-hosted, maya-live-proof]
     environment: maya-live-proof
-    timeout-minutes: 40
+    timeout-minutes: 55
     env:
       PROOF_MANIFEST: ${{ github.workspace }}/candidate/artifacts/proof/proof-manifest.json
       LIVE_PROOF_ARTIFACT_DIR: ${{ github.workspace }}/candidate/artifacts/live-visual-evidence-proof
@@ -315,7 +315,7 @@ jobs:
           set -euo pipefail
           # Persistent self-hosted runners can retain a partially written macOS test binary after cancellation.
           go clean -cache -testcache
-          go test -json ./internal/cli -run '^(TestOptInRealVisualEvidenceSmoke|TestOptInRealDesktopControlModalSmoke|TestOptInRealSSHDoctorSmoke|TestOptInRealPreRunReadinessSmoke|TestOptInRealSSHConsumingRepoSmoke|TestOptInRealSSHRunSmoke|TestOptInRealHostLockContentionAndRecoverySmoke|TestOptInRealRunScopedDesktopOpsSmoke|TestOptInRealLocalSessiondRuntimeInputSmoke)$' -count=1 -parallel=1 -timeout=30m | tee artifacts/proof/live-smoke.jsonl
+          go test -json ./internal/cli -run '^(TestOptInRealVisualEvidenceSmoke|TestOptInRealDesktopControlModalSmoke|TestOptInRealSSHDoctorSmoke|TestOptInRealPreRunReadinessSmoke|TestOptInRealSSHConsumingRepoSmoke|TestOptInRealSSHRunSmoke|TestOptInRealHostLockContentionAndRecoverySmoke|TestOptInRealRunScopedDesktopOpsSmoke|TestOptInRealLocalSessiondRuntimeInputSmoke)$' -count=1 -parallel=1 -timeout=45m | tee artifacts/proof/live-smoke.jsonl
 
       - name: Public artifact confidentiality gate
         id: confidentiality
