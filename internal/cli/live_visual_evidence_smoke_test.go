@@ -81,7 +81,7 @@ func TestOptInRealDesktopControlModalSmoke(t *testing.T) {
 	screenshot := requireLiveDesktopControlScreenshotArtifact(t, evidenceDir, bundle)
 	assertLiveDesktopControlScreenshotShowsModal(t, evidenceDir, screenshot)
 
-	prepareLiveDesktopControlModalClick(t, host, fixture)
+	fixture = prepareLiveDesktopControlModalClick(t, host, fixture)
 	var stdout, stderr bytes.Buffer
 	code := Run(options.controlClickArgs(fixture.ClickX, fixture.ClickY), &stdout, &stderr, dir, "test-version")
 	if code != 0 {
@@ -164,7 +164,7 @@ func TestOptInRealRunScopedDesktopOpsSmoke(t *testing.T) {
 	screenshot := requireLiveRunScopedScreenshotArtifact(t, evidenceDir, bundle)
 	assertLiveDesktopControlScreenshotShowsModal(t, evidenceDir, screenshot)
 
-	prepareLiveDesktopControlModalClick(t, host, fixture)
+	fixture = prepareLiveDesktopControlModalClick(t, host, fixture)
 	var controlStdout, controlStderr bytes.Buffer
 	controlCode := Run([]string{"attach", runID, "control", "click", "--x", strconv.Itoa(fixture.ClickX), "--y", strconv.Itoa(fixture.ClickY)}, &controlStdout, &controlStderr, dir, "test-version")
 	if controlCode != 0 {
@@ -592,6 +592,7 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 		ClickY:       251,
 		ProcessID:    42,
 		WindowHandle: 84,
+		ButtonHandle: 126,
 	}
 	launch := liveDesktopControlModalFixturePowerShell(fixture)
 	for _, want := range []string{
@@ -621,7 +622,7 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 	}
 
 	target := liveDesktopControlModalTargetPowerShell(fixture)
-	for _, want := range []string{"SetWindowPos", "WindowFromPoint", "$expectedPID = 42", "expected window handle 84", "/IT", "LIMITED", `status = "error"`, "$outcome | ConvertTo-Json -Compress"} {
+	for _, want := range []string{"SetWindowPos", "GetWindowRect", "WindowFromPoint", "$expectedPID = 42", "$expectedWindow = [IntPtr]84", "$expectedButton = [IntPtr]126", "targetWindow", "/IT", "LIMITED", `status = "error"`, "$outcome | ConvertTo-Json -Compress"} {
 		if !strings.Contains(target, want) {
 			t.Fatalf("modal fixture target preparation missing %q:\n%s", want, target)
 		}
@@ -871,6 +872,7 @@ type liveDesktopControlModalFixture struct {
 	ClickY       int
 	ProcessID    int
 	WindowHandle int64
+	ButtonHandle int64
 }
 
 func launchLiveDesktopControlModalFixture(t *testing.T, host mayaHostConfig) liveDesktopControlModalFixture {
@@ -902,8 +904,9 @@ func launchLiveDesktopControlModalFixture(t *testing.T, host mayaHostConfig) liv
 		ClickY       int    `json:"clickY"`
 		ProcessID    int    `json:"pid"`
 		WindowHandle int64  `json:"windowHandle"`
+		ButtonHandle int64  `json:"buttonHandle"`
 	}
-	if err := json.Unmarshal(trimToJSON(raw), &shown); err != nil || shown.Status != "shown" || shown.ClickX < 0 || shown.ClickY < 0 || shown.ProcessID <= 0 || shown.WindowHandle <= 0 {
+	if err := json.Unmarshal(trimToJSON(raw), &shown); err != nil || shown.Status != "shown" || shown.ClickX < 0 || shown.ClickY < 0 || shown.ProcessID <= 0 || shown.WindowHandle <= 0 || shown.ButtonHandle <= 0 {
 		_, _ = runSSHCommandOutput(host, encodedPowerShellCommand(liveDesktopControlModalCleanupPowerShell(fixture)), sessiondCommandTimeout)
 		t.Fatalf("live desktop control modal fixture did not report a screen-space click target: %s", strings.TrimSpace(string(raw)))
 	}
@@ -911,10 +914,11 @@ func launchLiveDesktopControlModalFixture(t *testing.T, host mayaHostConfig) liv
 	fixture.ClickY = shown.ClickY
 	fixture.ProcessID = shown.ProcessID
 	fixture.WindowHandle = shown.WindowHandle
+	fixture.ButtonHandle = shown.ButtonHandle
 	return fixture
 }
 
-func prepareLiveDesktopControlModalClick(t *testing.T, host mayaHostConfig, fixture liveDesktopControlModalFixture) {
+func prepareLiveDesktopControlModalClick(t *testing.T, host mayaHostConfig, fixture liveDesktopControlModalFixture) liveDesktopControlModalFixture {
 	t.Helper()
 	transport := sshWindowsDesktopTransport(host)
 	targetPath := remoteJoin(fixture.RemoteRoot, "prepare-desktop-control-modal-target.ps1")
@@ -929,13 +933,19 @@ func prepareLiveDesktopControlModalClick(t *testing.T, host mayaHostConfig, fixt
 		Status    string `json:"status"`
 		Detail    string `json:"detail"`
 		TargetPID int    `json:"targetPID"`
+		ClickX    int    `json:"clickX"`
+		ClickY    int    `json:"clickY"`
+		Window    int64  `json:"targetWindow"`
 	}
 	if err := json.Unmarshal(trimToJSON(raw), &target); err != nil {
 		t.Fatalf("parse owned live desktop control modal click target: %v: %s", err, strings.TrimSpace(string(raw)))
 	}
-	if target.Status != "ready" || target.TargetPID != fixture.ProcessID {
-		t.Fatalf("prepare owned live desktop control modal click target returned status %q for PID %d (expected PID %d): %s", target.Status, target.TargetPID, fixture.ProcessID, target.Detail)
+	if target.Status != "ready" || target.TargetPID != fixture.ProcessID || target.Window != fixture.ButtonHandle || target.ClickX < 0 || target.ClickY < 0 {
+		t.Fatalf("prepare owned live desktop control modal click target returned status %q for PID %d/window %d at (%d,%d) (expected PID %d/button %d): %s", target.Status, target.TargetPID, target.Window, target.ClickX, target.ClickY, fixture.ProcessID, fixture.ButtonHandle, target.Detail)
 	}
+	fixture.ClickX = target.ClickX
+	fixture.ClickY = target.ClickY
+	return fixture
 }
 
 func waitForLiveDesktopControlModalClosed(t *testing.T, host mayaHostConfig, fixture liveDesktopControlModalFixture) {
@@ -1144,7 +1154,7 @@ $form.Add_Shown({
   $form.Activate()
   $form.BringToFront()
   $button.Focus() | Out-Null
-  [pscustomobject]@{ status = "shown"; clickX = $center.X; clickY = $center.Y; pid = $PID; windowHandle = [int64]$form.Handle } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_SHOWN__"
+  [pscustomobject]@{ status = "shown"; clickX = $center.X; clickY = $center.Y; pid = $PID; windowHandle = [int64]$form.Handle; buttonHandle = [int64]$button.Handle } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_SHOWN__"
 })
 [void]$form.ShowDialog()
 '@
@@ -1183,6 +1193,7 @@ $ErrorActionPreference = "Stop"
 try {
   $expectedPID = %d
   $expectedWindow = [IntPtr]%d
+  $expectedButton = [IntPtr]%d
   if (-not (Get-Process -Id $expectedPID -ErrorAction SilentlyContinue)) { throw "owned desktop control modal process is not alive for expected PID $expectedPID" }
   $source = @"
 using System;
@@ -1190,16 +1201,23 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class MayaStallModalTarget {
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [DllImport("user32.dll", SetLastError = true)] static extern bool SetWindowPos(IntPtr handle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
   [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr handle);
   [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT point);
+  [DllImport("user32.dll", SetLastError = true)] static extern bool GetWindowRect(IntPtr handle, out RECT rect);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
-  public static uint ActivateAndVerify(IntPtr window, int x, int y) {
+  public static uint ActivateAndVerify(IntPtr window, IntPtr button, out int x, out int y, out long targetWindow) {
     if (!SetWindowPos(window, new IntPtr(-1), 0, 0, 0, 0, 0x0043)) throw new Win32Exception(Marshal.GetLastWin32Error(), "SetWindowPos failed for owned modal");
     SetForegroundWindow(window);
     System.Threading.Thread.Sleep(200);
+    RECT rect;
+    if (!GetWindowRect(button, out rect)) throw new Win32Exception(Marshal.GetLastWin32Error(), "GetWindowRect failed for owned modal button");
+    x = rect.Left + ((rect.Right - rect.Left) / 2);
+    y = rect.Top + ((rect.Bottom - rect.Top) / 2);
     POINT point = new POINT { X = x, Y = y };
     IntPtr target = WindowFromPoint(point);
+    targetWindow = target.ToInt64();
     uint processId;
     GetWindowThreadProcessId(target, out processId);
     return processId;
@@ -1207,9 +1225,12 @@ public static class MayaStallModalTarget {
 }
 "@
   Add-Type -TypeDefinition $source
-  $targetPID = [MayaStallModalTarget]::ActivateAndVerify($expectedWindow, %d, %d)
-  if ($targetPID -ne $expectedPID) { throw "desktop click target PID $targetPID does not match owned modal expected PID $expectedPID at (%d,%d) and expected window handle %d" }
-  [pscustomobject]@{ status = "ready"; targetPID = $targetPID } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_TARGET_RESULT__"
+  $clickX = 0
+  $clickY = 0
+  $targetWindow = [int64]0
+  $targetPID = [MayaStallModalTarget]::ActivateAndVerify($expectedWindow, $expectedButton, [ref]$clickX, [ref]$clickY, [ref]$targetWindow)
+  if ($targetPID -ne $expectedPID -or $targetWindow -ne $expectedButton.ToInt64()) { throw "desktop click target PID $targetPID/window $targetWindow does not match owned modal expected PID $expectedPID/button $($expectedButton.ToInt64()) at ($clickX,$clickY) and expected window handle $($expectedWindow.ToInt64())" }
+  [pscustomobject]@{ status = "ready"; targetPID = $targetPID; targetWindow = $targetWindow; clickX = $clickX; clickY = $clickY } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_TARGET_RESULT__"
 } catch {
   [pscustomobject]@{ status = "error"; detail = $_.Exception.Message } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_TARGET_RESULT__"
   exit 1
@@ -1246,11 +1267,7 @@ $outcome | ConvertTo-Json -Compress`,
 		powerShellSingleQuoted(fixture.TaskName+"-Target"),
 		fixture.ProcessID,
 		fixture.WindowHandle,
-		fixture.ClickX,
-		fixture.ClickY,
-		fixture.ClickX,
-		fixture.ClickY,
-		fixture.WindowHandle,
+		fixture.ButtonHandle,
 	)
 }
 
