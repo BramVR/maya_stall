@@ -916,7 +916,7 @@ func launchLiveDesktopControlModalFixture(t *testing.T, host mayaHostConfig) liv
 
 func prepareLiveDesktopControlModalClick(t *testing.T, host mayaHostConfig, fixture liveDesktopControlModalFixture) {
 	t.Helper()
-	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(liveDesktopControlModalTargetPowerShell(fixture)), sessiondCommandTimeout)
+	raw, err := sshWindowsDesktopTransport(host).RunPowerShell(liveDesktopControlModalTargetPowerShell(fixture), sessiondCommandTimeout)
 	if err != nil {
 		t.Fatalf("prepare owned live desktop control modal click target: %v: %s", err, strings.TrimSpace(string(raw)))
 	}
