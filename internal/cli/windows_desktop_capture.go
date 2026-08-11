@@ -333,7 +333,13 @@ $source = @"
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 public static class MouseInput {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct POINT {
+    public int x;
+    public int y;
+  }
   [StructLayout(LayoutKind.Sequential)]
   public struct MOUSEINPUT {
     public int dx;
@@ -350,9 +356,37 @@ public static class MouseInput {
   }
   [DllImport("user32.dll", SetLastError = true)]
   public static extern int GetSystemMetrics(int index);
+  [DllImport("user32.dll")]
+  public static extern IntPtr WindowFromPoint(POINT point);
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetAncestor(IntPtr window, uint flags);
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetForegroundWindow(IntPtr window);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool PostMessage(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern uint SendInput(uint inputCount, INPUT[] inputs, int inputSize);
-  public static void MoveAndClick(int x, int y) {
+  public static bool TryInvokeButtonAt(int x, int y) {
+    IntPtr target = WindowFromPoint(new POINT { x = x, y = y });
+    if (target == IntPtr.Zero) return false;
+    StringBuilder className = new StringBuilder(256);
+    if (GetClassName(target, className, className.Capacity) <= 0 || className.ToString().IndexOf("BUTTON", StringComparison.OrdinalIgnoreCase) < 0) return false;
+    IntPtr root = GetAncestor(target, 2);
+    if (root == IntPtr.Zero) return false;
+    if (GetForegroundWindow() != root && (!SetForegroundWindow(root) || GetForegroundWindow() != root)) return false;
+    if (!PostMessage(target, 0x00F5, UIntPtr.Zero, IntPtr.Zero)) {
+      throw new Win32Exception(Marshal.GetLastWin32Error(), "button click could not be queued for desktop control");
+    }
+    return true;
+  }
+  public static void ClickAt(int x, int y) {
+    if (TryInvokeButtonAt(x, y)) return;
     int left = GetSystemMetrics(76);
     int top = GetSystemMetrics(77);
     int width = GetSystemMetrics(78);
@@ -375,7 +409,7 @@ public static class MouseInput {
 }
 "@
 Add-Type -TypeDefinition $source
-[MouseInput]::MoveAndClick(%d, %d)
+[MouseInput]::ClickAt(%d, %d)
 Set-Content -LiteralPath "__MAYA_STALL_CLICK_DONE__" -Value "ok"
 '@
 try {
