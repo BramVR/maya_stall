@@ -56,7 +56,7 @@ func TestOptInRealLocalSessiondRuntimeInputSmoke(t *testing.T) {
 	if proof.Status != "passed" || proof.Runtime != "local-sessiond" || proof.HostAdapter != "local-windows" {
 		t.Fatalf("local Sessiond Evidence runtime = %+v", proof)
 	}
-	if proof.BrokerSession == "" || proof.BrokerSession != proof.StoppedSession || proof.BrokerSession != proof.LockSession || proof.LockRun != runID {
+	if !liveLocalSessiondOwnershipMatches(proof, runID) {
 		t.Fatalf("local Sessiond exact ownership proof = %+v", proof)
 	}
 	if proof.MayaSessionID == 0 {
@@ -323,6 +323,31 @@ type liveLocalSessiondProof struct {
 	SessiondMayaAlive, SessiondMCPAlive, OwnedProcessAlive                            bool
 	HostLockExists, RunRootExists, LocalRunStateExists, PortListening                 bool
 	ScreenshotBytes, MayaSessionID                                                    int
+}
+
+func liveLocalSessiondOwnershipMatches(proof liveLocalSessiondProof, runID string) bool {
+	if proof.BrokerSession == "" || proof.BrokerSession != proof.LockSession || proof.LockRun != runID {
+		return false
+	}
+	// Sessiond may replace a dead daemon's terminal state with the minimal
+	// stopped/daemon_not_alive shape. A retained session ID must still match,
+	// but its absence does not erase the active lock capture or cleanup proof.
+	return proof.StoppedSession == "" || proof.StoppedSession == proof.BrokerSession
+}
+
+func TestLiveLocalSessiondOwnershipAcceptsMinimalStoppedState(t *testing.T) {
+	proof := liveLocalSessiondProof{BrokerSession: "session-1", LockSession: "session-1", LockRun: "run-1"}
+	if !liveLocalSessiondOwnershipMatches(proof, "run-1") {
+		t.Fatal("minimal stopped state should preserve ownership through the active lock capture")
+	}
+	proof.StoppedSession = "session-1"
+	if !liveLocalSessiondOwnershipMatches(proof, "run-1") {
+		t.Fatal("matching terminal session should preserve ownership")
+	}
+	proof.StoppedSession = "session-2"
+	if liveLocalSessiondOwnershipMatches(proof, "run-1") {
+		t.Fatal("mismatched terminal session must fail ownership proof")
+	}
 }
 
 func inspectLiveLocalSessiondProof(t *testing.T, host mayaHostConfig, proofRoot string) liveLocalSessiondProof {

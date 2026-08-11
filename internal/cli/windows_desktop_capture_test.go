@@ -175,8 +175,9 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndUser32(t *testing.T) 
 		"/IT",
 		"LIMITED",
 		"user32.dll",
-		"SetCursorPos(12, 34)",
-		"mouse_event",
+		"SetCursorPos(x, y)",
+		"SendInput",
+		"[MouseInput]::Click(12, 34)",
 		"$deadline = (Get-Date).AddSeconds(30)",
 		"while ((Get-Date) -lt $deadline)",
 		"Remove-Item -Recurse -Force",
@@ -188,6 +189,9 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskAndUser32(t *testing.T) 
 	}
 	if strings.Contains(combined, "HIGHEST") {
 		t.Fatalf("desktop click must not require an elevated scheduled task:\n%s", combined)
+	}
+	if strings.Contains(combined, "mouse_event") || strings.Contains(combined, "Start-Sleep -Milliseconds 50") {
+		t.Fatalf("desktop click must insert checked input without the deprecated delayed path:\n%s", combined)
 	}
 }
 
