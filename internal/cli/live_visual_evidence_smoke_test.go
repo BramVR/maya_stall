@@ -621,10 +621,13 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 	}
 
 	target := liveDesktopControlModalTargetPowerShell(fixture)
-	for _, want := range []string{"SetWindowPos", "WindowFromPoint", "$expectedPID = 42", "expected window handle 84", "/IT", "LIMITED"} {
+	for _, want := range []string{"SetWindowPos", "WindowFromPoint", "$expectedPID = 42", "expected window handle 84", "/IT", "LIMITED", `status = "error"`, "$outcome | ConvertTo-Json -Compress"} {
 		if !strings.Contains(target, want) {
 			t.Fatalf("modal fixture target preparation missing %q:\n%s", want, target)
 		}
+	}
+	if strings.Contains(target, `Write-Output "owned modal target ready"`) {
+		t.Fatalf("modal fixture target preparation must return the scheduled task JSON outcome:\n%s", target)
 	}
 }
 
@@ -917,6 +920,17 @@ func prepareLiveDesktopControlModalClick(t *testing.T, host mayaHostConfig, fixt
 	if err != nil {
 		t.Fatalf("prepare owned live desktop control modal click target: %v: %s", err, strings.TrimSpace(string(raw)))
 	}
+	var target struct {
+		Status    string `json:"status"`
+		Detail    string `json:"detail"`
+		TargetPID int    `json:"targetPID"`
+	}
+	if err := json.Unmarshal(trimToJSON(raw), &target); err != nil {
+		t.Fatalf("parse owned live desktop control modal click target: %v: %s", err, strings.TrimSpace(string(raw)))
+	}
+	if target.Status != "ready" || target.TargetPID != fixture.ProcessID {
+		t.Fatalf("prepare owned live desktop control modal click target returned status %q for PID %d (expected PID %d): %s", target.Status, target.TargetPID, fixture.ProcessID, target.Detail)
+	}
 }
 
 func waitForLiveDesktopControlModalClosed(t *testing.T, host mayaHostConfig, fixture liveDesktopControlModalFixture) {
@@ -1201,25 +1215,28 @@ cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
 $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
 $taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
 $createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "LIMITED", "/IT", "/F")
+$outcome = $null
 try {
   & schtasks.exe @createArgs | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "failed to create interactive owned-modal target task with schtasks.exe /IT" }
   schtasks.exe /Run /TN $taskName | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "failed to run interactive owned-modal target task with schtasks.exe /Run" }
   for ($i = 0; $i -lt 40; $i++) {
     if (Test-Path -LiteralPath $result) {
-      $target = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
-      if ($target.status -ne "ready") { throw $target.detail }
-      Write-Output "owned modal target ready"
-      exit 0
+      $outcome = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+      break
     }
     Start-Sleep -Milliseconds 250
   }
-  throw "scheduled interactive owned-modal target check did not complete"
+  if ($null -eq $outcome) { throw "scheduled interactive owned-modal target check did not complete" }
+} catch {
+  $outcome = [pscustomobject]@{ status = "error"; detail = $_.Exception.Message; targetPID = 0 }
 } finally {
   schtasks.exe /Delete /TN $taskName /F 2>$null | Out-Null
   Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $result -Force -ErrorAction SilentlyContinue
-}`,
+}
+$outcome | ConvertTo-Json -Compress`,
 		powerShellSingleQuoted(fixture.RemoteRoot),
 		powerShellSingleQuoted(fixture.TaskName+"-Target"),
 		fixture.ProcessID,
