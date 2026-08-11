@@ -168,13 +168,12 @@ func TestOptInRealSSHRunSmoke(t *testing.T) {
 		t.Fatalf("real SSH retention attach missing broker/local evidence:\n%s", attachStdout.String())
 	}
 
-	var stopStdout, stopStderr bytes.Buffer
-	stopCode := Run([]string{"stop", runID}, &stopStdout, &stopStderr, dir, "test-version")
+	stopCode, stopStdout, stopStderr := runLiveRetainedStop(t, dir, runID)
 	if stopCode != 0 {
-		t.Fatalf("real SSH retention stop exit code = %d, want 0; stdout: %s stderr: %s", stopCode, stopStdout.String(), stopStderr.String())
+		t.Fatalf("real SSH retention stop exit code = %d, want 0; stdout: %s stderr: %s", stopCode, stopStdout, stopStderr)
 	}
-	if !strings.Contains(stopStdout.String(), "stopped: "+runID) {
-		t.Fatalf("real SSH retention stop missing run id:\n%s", stopStdout.String())
+	if !strings.Contains(stopStdout, "stopped: "+runID) {
+		t.Fatalf("real SSH retention stop missing run id:\n%s", stopStdout)
 	}
 	restoreLiveSessionBrokerFixture(t, host)
 	t.Run("shared Host Agent path", runOptInRealSharedHostAgentRunSmoke)
@@ -445,6 +444,26 @@ func liveHostHealthHasOnlyTransientSSHTimeout(report hostHealthReport) bool {
 	return lockClear && timedOut
 }
 
+func runLiveRetainedStop(t *testing.T, dir string, runID string) (int, string, string) {
+	t.Helper()
+	for attempt := 0; attempt < 2; attempt++ {
+		var stdout, stderr bytes.Buffer
+		code := Run([]string{"stop", runID}, &stdout, &stderr, dir, "test-version")
+		if code == 0 || attempt > 0 || !liveRetainedStopHasOnlyTransientSSHTimeout(code, stdout.String(), stderr.String()) {
+			return code, stdout.String(), stderr.String()
+		}
+		t.Logf("retrying exact retained-run stop once after transient SSH timeout for run %s", runID)
+		time.Sleep(2 * time.Second)
+	}
+	panic("unreachable")
+}
+
+func liveRetainedStopHasOnlyTransientSSHTimeout(code int, stdout string, stderr string) bool {
+	return code == 1 &&
+		strings.TrimSpace(stdout) == "" &&
+		strings.Contains(strings.ToLower(stderr), "maya-stall stop: ssh command timed out after ")
+}
+
 func TestLiveHostHealthTransientSSHTimeoutRetryScope(t *testing.T) {
 	report := hostHealthReport{Layers: []hostHealthLayer{
 		{ID: "host-lock", Status: "ok", State: "unlocked"},
@@ -461,6 +480,28 @@ func TestLiveHostHealthTransientSSHTimeoutRetryScope(t *testing.T) {
 	report.Layers[0].State = "locked"
 	if liveHostHealthHasOnlyTransientSSHTimeout(report) {
 		t.Fatal("a non-clear Host Lock must never be retried as transient SSH transport")
+	}
+}
+
+func TestLiveRetainedStopTransientSSHTimeoutRetryScope(t *testing.T) {
+	if !liveRetainedStopHasOnlyTransientSSHTimeout(1, "", "maya-stall stop: ssh command timed out after 30s\n") {
+		t.Fatal("an exact retained-run stop SSH timeout should receive one bounded retry")
+	}
+	for name, testCase := range map[string]struct {
+		code   int
+		stdout string
+		stderr string
+	}{
+		"success":        {code: 0},
+		"partial output": {code: 1, stdout: "stopped: run-id\n", stderr: "maya-stall stop: ssh command timed out after 30s\n"},
+		"authentication": {code: 1, stderr: "maya-stall stop: authentication failed\n"},
+		"ownership":      {code: 1, stderr: "maya-stall stop: Host Lock ownership changed\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if liveRetainedStopHasOnlyTransientSSHTimeout(testCase.code, testCase.stdout, testCase.stderr) {
+				t.Fatal("non-transient or ambiguous retained-run stop result must not be retried")
+			}
+		})
 	}
 }
 
