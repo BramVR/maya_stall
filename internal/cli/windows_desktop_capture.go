@@ -334,9 +334,7 @@ try {
 $source = @"
 using System;
 using System.ComponentModel;
-using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text;
 public static class MouseInput {
   [StructLayout(LayoutKind.Sequential)]
   public struct POINT {
@@ -359,35 +357,9 @@ public static class MouseInput {
   }
   [DllImport("user32.dll", SetLastError = true)]
   public static extern int GetSystemMetrics(int index);
-  [DllImport("user32.dll")]
-  public static extern IntPtr WindowFromPoint(POINT point);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  public static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern uint SendInput(uint inputCount, INPUT[] inputs, int inputSize);
-  public static bool TryInvokeButtonAt(int x, int y) {
-    IntPtr target = WindowFromPoint(new POINT { x = x, y = y });
-    if (target == IntPtr.Zero) return false;
-    StringBuilder className = new StringBuilder(256);
-    if (GetClassName(target, className, className.Capacity) <= 0 || className.ToString().IndexOf("BUTTON", StringComparison.OrdinalIgnoreCase) < 0) return false;
-    Assembly automation = Assembly.Load("UIAutomationClient, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35");
-    Type elementType = automation.GetType("System.Windows.Automation.AutomationElement", true);
-    Type invokePatternType = automation.GetType("System.Windows.Automation.InvokePattern", true);
-    object element = elementType.GetMethod("FromHandle", BindingFlags.Public | BindingFlags.Static).Invoke(null, new object[] { target });
-    if (element == null) throw new InvalidOperationException("UI Automation could not resolve the desktop control button");
-    object pattern = invokePatternType.GetField("Pattern", BindingFlags.Public | BindingFlags.Static).GetValue(null);
-    object[] patternArguments = new object[] { pattern, null };
-    bool supported = (bool)elementType.GetMethod("TryGetCurrentPattern").Invoke(element, patternArguments);
-    if (!supported || patternArguments[1] == null) throw new InvalidOperationException("desktop control button does not support UI Automation InvokePattern");
-    invokePatternType.GetMethod("Invoke", BindingFlags.Public | BindingFlags.Instance).Invoke(patternArguments[1], null);
-    // InvokePattern is asynchronous; keep the UIA client alive long enough for the provider to dispatch this one request.
-    System.Threading.Thread.Sleep(1000);
-    GC.KeepAlive(patternArguments[1]);
-    GC.KeepAlive(element);
-    return true;
-  }
   public static void ClickAt(int x, int y) {
-    if (TryInvokeButtonAt(x, y)) return;
     int left = GetSystemMetrics(76);
     int top = GetSystemMetrics(77);
     int width = GetSystemMetrics(78);
@@ -406,6 +378,8 @@ public static class MouseInput {
     if (inserted != (uint)inputs.Length) {
       throw new Win32Exception(Marshal.GetLastWin32Error(), "SendInput did not insert the complete desktop click");
     }
+    // SendInput queues the batch; keep the interactive helper alive while Windows dispatches it.
+    System.Threading.Thread.Sleep(1000);
   }
 }
 "@

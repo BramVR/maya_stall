@@ -164,7 +164,7 @@ func TestWindowsDesktopCapturePreservesPowerShellPrerequisiteErrors(t *testing.T
 	}
 }
 
-func TestWindowsDesktopClickUsesInteractiveScheduledTaskUIAutomationAndSendInput(t *testing.T) {
+func TestWindowsDesktopClickUsesInteractiveScheduledTaskAtomicSendInput(t *testing.T) {
 	transport := &fakeWindowsDesktopTransport{}
 
 	if err := clickWindowsDesktop(transport, "C:/maya-stall/artifacts/control", 12, 34); err != nil {
@@ -178,17 +178,11 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskUIAutomationAndSendInput
 		"LIMITED",
 		"user32.dll",
 		"ClickAt(12, 34)",
-		"WindowFromPoint",
-		"Assembly.Load(\"UIAutomationClient, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35\")",
-		"System.Windows.Automation.AutomationElement",
-		"System.Windows.Automation.InvokePattern",
-		"TryGetCurrentPattern",
-		"System.Threading.Thread.Sleep(1000)",
-		"GC.KeepAlive(patternArguments[1])",
 		"GetSystemMetrics(76)",
 		"dwFlags = 0xC001",
 		"SendInput",
 		"inserted != (uint)inputs.Length",
+		"System.Threading.Thread.Sleep(1000)",
 		"$deadline = (Get-Date).AddSeconds(30)",
 		"while ((Get-Date) -lt $deadline)",
 		"desktop-click.failed",
@@ -209,8 +203,8 @@ func TestWindowsDesktopClickUsesInteractiveScheduledTaskUIAutomationAndSendInput
 	if strings.Contains(combined, "SetCursorPos") {
 		t.Fatalf("desktop click must atomically move and click in one SendInput batch:\n%s", combined)
 	}
-	if strings.Contains(combined, "PostMessage") || strings.Contains(combined, "0x00F5") {
-		t.Fatalf("desktop button click must use UI Automation instead of foreground-sensitive BM_CLICK messages:\n%s", combined)
+	if strings.Contains(combined, "PostMessage") || strings.Contains(combined, "SendMessage") || strings.Contains(combined, "UIAutomationClient") {
+		t.Fatalf("desktop click must use one atomic input batch instead of a separate semantic dispatch path:\n%s", combined)
 	}
 }
 
