@@ -6,6 +6,7 @@ Release history starts with `v0.1.0`.
 
 ## Unreleased
 
+- Fixed long SSH Scenario finalization so transient remote Host Lock renewal/release failures retry only after exact ownership is re-proven, and SFTP collection reconnects once after transport exit 255 instead of discarding an otherwise valid Scenario Result.
 - Renamed the repository and Go module from `BramVR/gg_maya_stall` to `BramVR/maya_stall`, with canonical badges, docs, examples, and release commands.
 - Added a required Windows CI job that runs the full Go suite on `windows-latest` and gates it against a recorded known-failure list, so Windows regressions fail closed; the list is fail-closed in both directions and rejects an incomplete run, so it can only shrink.
 - Fixed the declared Go version so hosts running an older toolchain can still build: the bare `go 1.25` directive resolved to a toolchain name that does not exist and failed with `toolchain not available`.

@@ -195,17 +195,31 @@ func replaceRemoteHostLockOwner(host mayaHostConfig, expected string, content st
 	if err != nil {
 		return err
 	}
+	return replaceRemoteHostLockOwnerWithTransport(host, lockPath, expected, content, runRemoteHostLockScript, readRemoteHostLockState)
+}
+
+func replaceRemoteHostLockOwnerWithTransport(
+	host mayaHostConfig,
+	lockPath string,
+	expected string,
+	content string,
+	run func(mayaHostConfig, string) (remoteHostLockResult, error),
+	read func(mayaHostConfig, string) (remoteHostLockResult, error),
+) error {
 	for attempt := 0; ; attempt++ {
-		result, err := runRemoteHostLockScript(host, remoteHostLockReplaceScript(lockPath, expected, content))
+		result, err := run(host, remoteHostLockReplaceScript(lockPath, expected, content))
 		if err != nil {
-			state, stateErr := readRemoteHostLockState(host, lockPath)
+			state, stateErr := read(host, lockPath)
 			if stateErr == nil && state.Raw == content {
 				return nil
 			}
 			if stateErr == nil && (state.State == "unlocked" || (state.ContentRead && state.Raw != expected)) {
 				return fmt.Errorf("%w on Maya Host", errHostLockOwnershipChanged)
 			}
-			if attempt+1 < maxRemoteHostLockTimeoutAttempts && isRemoteHostLockTimeout(err) {
+			// A remote PowerShell failure can surface as SSH exit 255 even though
+			// the connection reached the Host. Retry only after an independent
+			// state read proves this controller still owns the exact prior lock.
+			if stateErr == nil && state.Raw == expected && attempt+1 < maxRemoteHostLockTimeoutAttempts {
 				time.Sleep(remoteHostLockRetryDelay)
 				continue
 			}
@@ -223,18 +237,28 @@ func removeRemoteHostLock(host mayaHostConfig, expected string) error {
 	if err != nil {
 		return err
 	}
+	return removeRemoteHostLockWithTransport(host, lockPath, expected, runRemoteHostLockScript, readRemoteHostLockState)
+}
+
+func removeRemoteHostLockWithTransport(
+	host mayaHostConfig,
+	lockPath string,
+	expected string,
+	run func(mayaHostConfig, string) (remoteHostLockResult, error),
+	read func(mayaHostConfig, string) (remoteHostLockResult, error),
+) error {
 	for attempt := 0; ; attempt++ {
-		result, err := runRemoteHostLockScript(host, remoteHostLockRemoveScript(lockPath, expected))
+		result, err := run(host, remoteHostLockRemoveScript(lockPath, expected))
 		if err != nil {
-			state, stateErr := readRemoteHostLockState(host, lockPath)
+			state, stateErr := read(host, lockPath)
 			if stateErr == nil && state.State == "unlocked" {
 				return nil
 			}
 			if stateErr == nil && state.Raw != "" && state.Raw != expected {
 				return fmt.Errorf("%w on Maya Host", errHostLockOwnershipChanged)
 			}
-			if attempt < maxRemoteHostLockReclaimAttempts && isRemoteHostLockTimeout(err) {
-				time.Sleep(250 * time.Millisecond)
+			if stateErr == nil && state.Raw == expected && attempt+1 < maxRemoteHostLockTimeoutAttempts {
+				time.Sleep(remoteHostLockRetryDelay)
 				continue
 			}
 			return errors.Join(err, stateErr)

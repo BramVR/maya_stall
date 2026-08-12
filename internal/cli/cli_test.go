@@ -2979,6 +2979,60 @@ func TestRunSFTPBatchUsesPublicSafeSFTPDiagnostic(t *testing.T) {
 	}
 }
 
+func TestRunSFTPBatchReconnectsAfterExit255(t *testing.T) {
+	oldDelay := sftpReconnectDelay
+	sftpReconnectDelay = 0
+	t.Cleanup(func() { sftpReconnectDelay = oldDelay })
+	exit255 := commandExitError(t, 255)
+	calls := 0
+	err := runSFTPBatchWithReconnectUsing(func() error {
+		calls++
+		if calls == 1 {
+			return fmt.Errorf("sftp command failed: %w", exit255)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("SFTP collection did not reconnect after exit 255: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("SFTP calls = %d; want one reconnect", calls)
+	}
+}
+
+func TestRunSFTPBatchDoesNotRetryOrdinaryCollectionFailure(t *testing.T) {
+	oldDelay := sftpReconnectDelay
+	sftpReconnectDelay = 0
+	t.Cleanup(func() { sftpReconnectDelay = oldDelay })
+	calls := 0
+	err := runSFTPBatchWithReconnectUsing(func() error {
+		calls++
+		return errors.New("file not found")
+	})
+	if err == nil {
+		t.Fatal("missing SFTP output unexpectedly succeeded")
+	}
+	if calls != 1 {
+		t.Fatalf("SFTP calls = %d; ordinary failure must not reconnect", calls)
+	}
+}
+
+func commandExitError(t *testing.T, code int) error {
+	t.Helper()
+	var command *exec.Cmd
+	if runtime.GOOS == "windows" {
+		command = exec.Command("cmd.exe", "/c", "exit", strconv.Itoa(code))
+	} else {
+		command = exec.Command("sh", "-c", "exit "+strconv.Itoa(code))
+	}
+	err := command.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != code {
+		t.Fatalf("create exit error %d: %v", code, err)
+	}
+	return err
+}
+
 func TestTrustedPluginAllowlistParsesAndNormalizesMayaPrefs(t *testing.T) {
 	prefs := `// Security
 optionVar -cat "Security"
