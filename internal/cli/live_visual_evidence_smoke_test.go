@@ -8,7 +8,9 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -601,24 +603,28 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 	launch := liveDesktopControlModalFixturePowerShell(fixture)
 	for _, want := range []string{
 		"System.Windows.Forms",
-		"ShowDialog",
+		"Application.Run(form)",
 		"schtasks.exe",
 		"/IT",
 		"LIMITED",
 		"desktop-control-modal.shown",
 		"desktop-control-modal.closed",
-		"FormBorderStyle = \"None\"",
-		"FromArgb(255, 0, 255)",
+		"FormBorderStyle.None",
+		"Color.FromArgb(255, 0, 255)",
 		"PointToScreen",
 		"WorkingArea",
 		"windowHandle",
-		"Add_Click",
-		"Publish-Json",
-		"[System.IO.File]::Move",
+		"public static class MayaStallModalFixture",
+		"button.Click += delegate",
+		"PublishJson",
+		"File.Move",
 	} {
 		if !strings.Contains(launch, want) {
 			t.Fatalf("modal fixture launch missing %q:\n%s", want, launch)
 		}
+	}
+	if strings.Contains(launch, "Add_Click") {
+		t.Fatalf("modal fixture must use a native event handler instead of a PowerShell event closure:\n%s", launch)
 	}
 
 	cleanup := liveDesktopControlModalCleanupPowerShell(fixture)
@@ -651,6 +657,29 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 		if !strings.Contains(closed, want) {
 			t.Fatalf("modal fixture close wait missing %q:\n%s", want, closed)
 		}
+	}
+}
+
+func TestLiveDesktopControlModalNativeSourceCompilesOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell Add-Type proof")
+	}
+	launch := liveDesktopControlModalFixturePowerShell(liveDesktopControlModalFixture{
+		RemoteRoot: "C:/maya-stall/artifacts/modal-proof",
+		TaskName:   "MayaStallDesktopControlModal-proof",
+	})
+	const sourceStart = "$source = @\"\n"
+	const sourceEnd = "\n\"@\nAdd-Type -TypeDefinition $source"
+	start := strings.Index(launch, sourceStart)
+	end := strings.Index(launch, sourceEnd)
+	if start < 0 || end <= start {
+		t.Fatalf("generated modal fixture is missing its native source boundaries:\n%s", launch)
+	}
+	source := launch[start+len(sourceStart) : end]
+	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$source = [Console]::In.ReadToEnd(); Add-Type -TypeDefinition $source -ReferencedAssemblies @("System.Windows.Forms.dll", "System.Drawing.dll")`)
+	command.Stdin = strings.NewReader(source)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("compile generated native modal fixture: %v: %s", err, output)
 	}
 }
 
@@ -1132,58 +1161,79 @@ $pidPath = Join-Path $root "desktop-control-modal.pid"
 $script = Join-Path $root "desktop-control-modal.ps1"
 $template = @'
 $ErrorActionPreference = "Stop"
-function Publish-Json([string]$Path, [object]$Value) {
-  $temporary = $Path + "." + [Guid]::NewGuid().ToString("N") + ".tmp"
-  [System.IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Compress), [System.Text.Encoding]::ASCII)
-  [System.IO.File]::Move($temporary, $Path)
-}
-Set-Content -LiteralPath "__MAYA_STALL_MODAL_PID__" -Value $PID
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-[System.Windows.Forms.Application]::EnableVisualStyles()
-$form = New-Object System.Windows.Forms.Form
-$form.FormBorderStyle = "None"
-$form.TopMost = $true
-$form.StartPosition = "Manual"
-$form.Size = New-Object System.Drawing.Size(420, 220)
-$workingArea = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-$horizontalSpan = [Math]::Max(1, $workingArea.Width - $form.Width - 48)
-$verticalSpan = [Math]::Max(1, $workingArea.Height - $form.Height - 48)
-$seed = [Math]::Abs([int64]$PID)
-$left = $workingArea.Left + 24 + [int]($seed %% $horizontalSpan)
-$top = $workingArea.Top + 24 + [int](($seed * 37) %% $verticalSpan)
-$form.Location = New-Object System.Drawing.Point($left, $top)
-$form.BackColor = [System.Drawing.Color]::FromArgb(255, 0, 255)
-$label = New-Object System.Windows.Forms.Label
-$label.AutoSize = $false
-$label.Location = New-Object System.Drawing.Point(24, 26)
-$label.Size = New-Object System.Drawing.Size(372, 72)
-$label.BackColor = [System.Drawing.Color]::White
-$label.Text = "Maya Stall desktop control smoke prompt"
-$label.Font = New-Object System.Drawing.Font("Segoe UI", 14)
-$form.Controls.Add($label)
-$marker = New-Object System.Windows.Forms.Panel
-$marker.Location = New-Object System.Drawing.Point(300, 24)
-$marker.Size = New-Object System.Drawing.Size(80, 50)
-$marker.BackColor = [System.Drawing.Color]::FromArgb(255, 0, 255)
-$form.Controls.Add($marker)
-$button = New-Object System.Windows.Forms.Button
-$button.Text = "OK"
-$button.Location = New-Object System.Drawing.Point(%d, 110)
-$button.Size = New-Object System.Drawing.Size(100, 42)
-$button.Add_Click({
-  Set-Content -LiteralPath "__MAYA_STALL_MODAL_CLOSED__" -Value "clicked"
-  $form.Close()
-})
-$form.Controls.Add($button)
-$form.Add_Shown({
-  $center = $button.PointToScreen([System.Drawing.Point]::new([int]($button.Width / 2), [int]($button.Height / 2)))
-  $form.Activate()
-  $form.BringToFront()
-  $button.Focus() | Out-Null
-  Publish-Json "__MAYA_STALL_MODAL_SHOWN__" ([pscustomobject]@{ status = "shown"; clickX = $center.X; clickY = $center.Y; pid = $PID; windowHandle = [int64]$form.Handle; buttonHandle = [int64]$button.Handle })
-})
-[void]$form.ShowDialog()
+$source = @"
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using System.Windows.Forms;
+
+public static class MayaStallModalFixture {
+  private static void PublishJson(string path, string value) {
+    string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+    File.WriteAllText(temporary, value, Encoding.ASCII);
+    File.Move(temporary, path);
+  }
+
+  public static void Run(string pidPath, string shownPath, string closedPath, int buttonLeft) {
+    int processID = Process.GetCurrentProcess().Id;
+    File.WriteAllText(pidPath, processID.ToString(CultureInfo.InvariantCulture), Encoding.ASCII);
+    Application.EnableVisualStyles();
+    using (Form form = new Form()) {
+      form.FormBorderStyle = FormBorderStyle.None;
+      form.TopMost = true;
+      form.StartPosition = FormStartPosition.Manual;
+      form.Size = new Size(420, 220);
+      Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
+      int horizontalSpan = Math.Max(1, workingArea.Width - form.Width - 48);
+      int verticalSpan = Math.Max(1, workingArea.Height - form.Height - 48);
+      long seed = Math.Abs((long)processID);
+      form.Location = new Point(workingArea.Left + 24 + (int)(seed %% horizontalSpan), workingArea.Top + 24 + (int)((seed * 37) %% verticalSpan));
+      form.BackColor = Color.FromArgb(255, 0, 255);
+
+      Label label = new Label();
+      label.AutoSize = false;
+      label.Location = new Point(24, 26);
+      label.Size = new Size(372, 72);
+      label.BackColor = Color.White;
+      label.Text = "Maya Stall desktop control smoke prompt";
+      label.Font = new Font("Segoe UI", 14);
+      form.Controls.Add(label);
+
+      Panel marker = new Panel();
+      marker.Location = new Point(300, 24);
+      marker.Size = new Size(80, 50);
+      marker.BackColor = Color.FromArgb(255, 0, 255);
+      form.Controls.Add(marker);
+
+      Button button = new Button();
+      button.Text = "OK";
+      button.Location = new Point(buttonLeft, 110);
+      button.Size = new Size(100, 42);
+      button.Click += delegate {
+        File.WriteAllText(closedPath, "clicked", Encoding.ASCII);
+        form.Close();
+      };
+      form.Controls.Add(button);
+      form.Shown += delegate {
+        Point center = button.PointToScreen(new Point(button.Width / 2, button.Height / 2));
+        form.Activate();
+        form.BringToFront();
+        button.Focus();
+        string shown = string.Format(CultureInfo.InvariantCulture, "{{\"status\":\"shown\",\"clickX\":{0},\"clickY\":{1},\"pid\":{2},\"windowHandle\":{3},\"buttonHandle\":{4}}}", center.X, center.Y, processID, form.Handle.ToInt64(), button.Handle.ToInt64());
+        PublishJson(shownPath, shown);
+      };
+      Application.Run(form);
+    }
+  }
+}
+"@
+Add-Type -TypeDefinition $source -ReferencedAssemblies @("System.Windows.Forms.dll", "System.Drawing.dll")
+[MayaStallModalFixture]::Run("__MAYA_STALL_MODAL_PID__", "__MAYA_STALL_MODAL_SHOWN__", "__MAYA_STALL_MODAL_CLOSED__", %d)
 '@
 $content = $template.Replace("__MAYA_STALL_MODAL_PID__", $pidPath.Replace("\", "\\")).Replace("__MAYA_STALL_MODAL_SHOWN__", $shown.Replace("\", "\\")).Replace("__MAYA_STALL_MODAL_CLOSED__", $closed.Replace("\", "\\"))
 Set-Content -Encoding ASCII -LiteralPath $script -Value $content
