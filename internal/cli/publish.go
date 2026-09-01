@@ -145,11 +145,11 @@ func publishEvidenceBundle(repoDir string, options evidencePublishOptions) (publ
 func readEvidenceBundleFile(bundleDir string) (evidenceBundle, error) {
 	evidencePath, ok := safeBundlePath(bundleDir, evidenceBundleFileName)
 	if !ok {
-		return evidenceBundle{}, fmt.Errorf("Evidence Bundle metadata path is unsafe")
+		return evidenceBundle{}, fmt.Errorf("evidence bundle metadata path is unsafe")
 	}
 	info, err := os.Lstat(evidencePath)
 	if err != nil || !info.Mode().IsRegular() {
-		return evidenceBundle{}, errors.Join(fmt.Errorf("Evidence Bundle metadata must be a regular file"), err)
+		return evidenceBundle{}, errors.Join(fmt.Errorf("evidence bundle metadata must be a regular file"), err)
 	}
 	content, err := os.ReadFile(evidencePath)
 	if err != nil {
@@ -165,15 +165,15 @@ func readEvidenceBundleFile(bundleDir string) (evidenceBundle, error) {
 		}
 	}
 	if bundle.Manifest != evidenceManifestFileName {
-		return evidenceBundle{}, fmt.Errorf("Evidence Bundle must use canonical manifest path %s", evidenceManifestFileName)
+		return evidenceBundle{}, fmt.Errorf("evidence bundle must use canonical manifest path %s", evidenceManifestFileName)
 	}
 	manifestPath, ok := safeBundlePath(bundleDir, bundle.Manifest)
 	if !ok {
-		return evidenceBundle{}, fmt.Errorf("Evidence Bundle manifest path is missing or unsafe")
+		return evidenceBundle{}, fmt.Errorf("evidence bundle manifest path is missing or unsafe")
 	}
 	info, err = os.Lstat(manifestPath)
 	if err != nil || !info.Mode().IsRegular() {
-		return evidenceBundle{}, errors.Join(fmt.Errorf("Evidence Bundle manifest must be a regular file"), err)
+		return evidenceBundle{}, errors.Join(fmt.Errorf("evidence bundle manifest must be a regular file"), err)
 	}
 	manifestContent, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -188,14 +188,14 @@ func readEvidenceBundleFile(bundleDir string) (evidenceBundle, error) {
 	if reportInfo, reportErr := os.Lstat(filepath.Join(bundleDir, evidenceReportFileName)); reportErr == nil {
 		reportExists = true
 		if !reportInfo.Mode().IsRegular() {
-			return evidenceBundle{}, fmt.Errorf("Evidence Bundle report must be a regular file")
+			return evidenceBundle{}, fmt.Errorf("evidence bundle report must be a regular file")
 		}
 		requireIdentity = true
 	} else if !errors.Is(reportErr, os.ErrNotExist) {
 		return evidenceBundle{}, reportErr
 	}
 	if reportExists && manifest.Report == nil {
-		return evidenceBundle{}, fmt.Errorf("Evidence Bundle report exists without manifest authority")
+		return evidenceBundle{}, fmt.Errorf("evidence bundle report exists without manifest authority")
 	}
 	if err := validateEvidenceManifestIdentity(bundle, manifest, requireIdentity); err != nil {
 		return evidenceBundle{}, err
@@ -206,13 +206,13 @@ func readEvidenceBundleFile(bundleDir string) (evidenceBundle, error) {
 
 func validateEvidenceManifestIdentity(bundle evidenceBundle, manifest runManifest, required bool) error {
 	if required && (manifest.RunID == "" || manifest.Scenario == "") {
-		return fmt.Errorf("Evidence Bundle manifest identifies another run")
+		return fmt.Errorf("evidence bundle manifest identifies another run")
 	}
 	if manifest.RunID != "" && manifest.RunID != bundle.RunID ||
 		manifest.Scenario != "" && manifest.Scenario != bundle.Scenario ||
 		manifest.TargetProfile != "" && manifest.TargetProfile != bundle.TargetProfile ||
 		manifest.Host != "" && manifest.Host != bundle.Host {
-		return fmt.Errorf("Evidence Bundle manifest identifies another run")
+		return fmt.Errorf("evidence bundle manifest identifies another run")
 	}
 	return nil
 }
@@ -269,7 +269,7 @@ func replacePublishedDir(bundleDir string, publishedDir string, populate func(st
 func buildPublishedArtifactManifest(publishedDir string, bundle evidenceBundle, baseURL string) (publishedArtifactManifest, error) {
 	if bundle.Report != nil {
 		if bundle.Report.Path != evidenceReportFileName || bundle.Report.Kind != "report" || bundle.Report.MediaType != reportMediaType {
-			return publishedArtifactManifest{}, fmt.Errorf("Evidence Bundle report metadata is invalid")
+			return publishedArtifactManifest{}, fmt.Errorf("evidence bundle report metadata is invalid")
 		}
 		if err := verifyReportArtifact(filepath.Join(publishedDir, evidenceReportFileName), *bundle.Report); err != nil {
 			return publishedArtifactManifest{}, err
@@ -287,7 +287,7 @@ func buildPublishedArtifactManifest(publishedDir string, bundle evidenceBundle, 
 			return publishedArtifactManifest{}, err
 		}
 		if !bytes.Equal(actual, expected) {
-			return publishedArtifactManifest{}, fmt.Errorf("Evidence Bundle report does not project current canonical evidence")
+			return publishedArtifactManifest{}, fmt.Errorf("evidence bundle report does not project current canonical evidence")
 		}
 	}
 	var artifacts []publishedArtifact
@@ -300,7 +300,7 @@ func buildPublishedArtifactManifest(publishedDir string, bundle evidenceBundle, 
 			return nil
 		}
 		if artifact.Kind == "report" && (bundle.Report == nil || artifact.Path != bundle.Report.Path) {
-			return fmt.Errorf("Evidence Bundle contains an unverified report artifact %s", artifact.Path)
+			return fmt.Errorf("evidence bundle contains an unverified report artifact %s", artifact.Path)
 		}
 		clean, err := cleanPublishedRelativePath(path)
 		if err != nil {

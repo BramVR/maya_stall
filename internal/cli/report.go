@@ -333,7 +333,7 @@ func invalidateEvidenceReport(bundleDir string) error {
 	reportPath := filepath.Join(bundleDir, evidenceReportFileName)
 	if info, err := os.Lstat(reportPath); err == nil {
 		if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
-			return fmt.Errorf("Evidence Bundle report leaf must be a regular file or symlink")
+			return fmt.Errorf("evidence bundle report leaf must be a regular file or symlink")
 		}
 		if removeErr := os.Remove(reportPath); removeErr != nil {
 			return removeErr
@@ -704,7 +704,7 @@ func readBoundedReportFile(path string, limit int64) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	content, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, false, err

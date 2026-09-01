@@ -277,7 +277,7 @@ func RunWithRuntime(args []string, stdout io.Writer, stderr io.Writer, workDir s
 		return 0
 	case "evidence":
 		if len(args) < 2 {
-			fmt.Fprintf(stderr, "maya-stall evidence: expected collect, publish, or report\n")
+			_, _ = fmt.Fprintln(stderr, "maya-stall evidence: expected collect, publish, or report")
 			return 2
 		}
 		switch args[1] {
@@ -356,12 +356,12 @@ func RunWithRuntime(args []string, stdout io.Writer, stderr io.Writer, workDir s
 		case "report":
 			options, err := parseEvidenceReportArgs(args[2:])
 			if err != nil {
-				fmt.Fprintf(stderr, "maya-stall evidence report: %v\n", err)
+				_, _ = fmt.Fprintf(stderr, "maya-stall evidence report: %v\n", err)
 				return 2
 			}
 			view, output, err := renderExistingEvidenceReport(workDir, options)
 			if err != nil {
-				fmt.Fprintf(stderr, "maya-stall evidence report: %v\n", err)
+				_, _ = fmt.Fprintf(stderr, "maya-stall evidence report: %v\n", err)
 				return 1
 			}
 			fmt.Fprintf(stdout, "run: %s\nverdict: %s\nreport: %s\n", view.RunID, view.Verdict, output)
