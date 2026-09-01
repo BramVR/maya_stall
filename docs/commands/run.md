@@ -286,6 +286,11 @@ An expired lease is recoverable only after the configured Session Broker proves
 that no Maya UI Session is active. Unreadable ownership, a live lease, or an
 unavailable/active broker fails closed. The repo-local lock remains as a mirror
 for local commands and migration, but it is not the authority for an SSH host.
+If a remote renewal or release command fails, Maya Stall retries once only when
+an independent Host Lock read proves the exact prior token and content still
+belong to the current controller. Changed or unreadable ownership still fails
+closed. SFTP output collection similarly opens one fresh connection after an
+exit-255 transport failure; ordinary missing-output failures are not retried.
 
 Use `--host-lock-wait <duration>` to wait for a busy host or
 `--host-lock-fail-fast` to fail immediately.

@@ -111,6 +111,123 @@ func TestRemoteHostLockReplaceRetryAcceptsAlreadyUpdatedContent(t *testing.T) {
 	}
 }
 
+func TestRemoteHostLockRenewalRetriesAfterUnchangedOwnershipOnRemoteFailure(t *testing.T) {
+	oldDelay := remoteHostLockRetryDelay
+	remoteHostLockRetryDelay = 0
+	t.Cleanup(func() { remoteHostLockRetryDelay = oldDelay })
+	expected := "host: maya-win\nactiveRun: run-owned\nlockToken: token-owned\n"
+	replacement := expected + "leaseExpiresAt: later\n"
+	mutations := 0
+	run := func(mayaHostConfig, string) (remoteHostLockResult, error) {
+		mutations++
+		if mutations == 1 {
+			return remoteHostLockResult{}, errors.New("remote PowerShell lock file temporarily unavailable")
+		}
+		return remoteHostLockResult{State: "updated"}, nil
+	}
+	reads := 0
+	read := func(mayaHostConfig, string) (remoteHostLockResult, error) {
+		reads++
+		return remoteHostLockResult{Locked: true, State: "active", Raw: expected, ContentRead: true}, nil
+	}
+
+	if err := replaceRemoteHostLockOwnerWithTransport(mayaHostConfig{}, "host.lock", expected, replacement, run, read); err != nil {
+		t.Fatalf("renew unchanged Host Lock after transient remote failure: %v", err)
+	}
+	if mutations != 2 || reads != 1 {
+		t.Fatalf("renew calls = mutations %d reads %d; want failed replace, ownership read, successful reconnect", mutations, reads)
+	}
+}
+
+func TestRemoteHostLockReleaseRetriesAfterUnchangedOwnershipOnRemoteFailure(t *testing.T) {
+	oldDelay := remoteHostLockRetryDelay
+	remoteHostLockRetryDelay = 0
+	t.Cleanup(func() { remoteHostLockRetryDelay = oldDelay })
+	expected := "host: maya-win\nactiveRun: run-owned\nlockToken: token-owned\n"
+	mutations := 0
+	run := func(mayaHostConfig, string) (remoteHostLockResult, error) {
+		mutations++
+		if mutations == 1 {
+			return remoteHostLockResult{}, errors.New("remote PowerShell lock file temporarily unavailable")
+		}
+		return remoteHostLockResult{State: "unlocked"}, nil
+	}
+	reads := 0
+	read := func(mayaHostConfig, string) (remoteHostLockResult, error) {
+		reads++
+		return remoteHostLockResult{Locked: true, State: "active", Raw: expected, ContentRead: true}, nil
+	}
+
+	if err := removeRemoteHostLockWithTransport(mayaHostConfig{}, "host.lock", expected, run, read); err != nil {
+		t.Fatalf("release unchanged Host Lock after transient remote failure: %v", err)
+	}
+	if mutations != 2 || reads != 1 {
+		t.Fatalf("release calls = mutations %d reads %d; want failed release, ownership read, successful reconnect", mutations, reads)
+	}
+}
+
+func TestRemoteHostLockRenewalDoesNotRetryAfterSuccessorTakesOwnership(t *testing.T) {
+	oldDelay := remoteHostLockRetryDelay
+	remoteHostLockRetryDelay = 0
+	t.Cleanup(func() { remoteHostLockRetryDelay = oldDelay })
+	expected := "host: maya-win\nactiveRun: run-old\nlockToken: token-old\n"
+	successor := "host: maya-win\nactiveRun: run-new\nlockToken: token-new\n"
+	mutations := 0
+	run := func(mayaHostConfig, string) (remoteHostLockResult, error) {
+		mutations++
+		return remoteHostLockResult{}, errors.New("remote PowerShell lock file temporarily unavailable")
+	}
+	reads := 0
+	read := func(mayaHostConfig, string) (remoteHostLockResult, error) {
+		reads++
+		return remoteHostLockResult{Locked: true, State: "active", Raw: successor, ContentRead: true}, nil
+	}
+
+	err := replaceRemoteHostLockOwnerWithTransport(mayaHostConfig{}, "host.lock", expected, expected+"leaseExpiresAt: later\n", run, read)
+	if !errors.Is(err, errHostLockOwnershipChanged) {
+		t.Fatalf("renewal after successor ownership error = %v, want Host Lock ownership changed", err)
+	}
+	if mutations != 1 || reads != 1 {
+		t.Fatalf("successor ownership calls = mutations %d reads %d; must prevent retry", mutations, reads)
+	}
+}
+
+func TestRemoteHostLockMutationTimeoutDoesNotRetryWithoutOwnershipProof(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(func(mayaHostConfig, string) (remoteHostLockResult, error), func(mayaHostConfig, string) (remoteHostLockResult, error)) error
+	}{
+		{
+			name: "renewal",
+			mutate: func(run func(mayaHostConfig, string) (remoteHostLockResult, error), read func(mayaHostConfig, string) (remoteHostLockResult, error)) error {
+				return replaceRemoteHostLockOwnerWithTransport(mayaHostConfig{}, "host.lock", "expected", "replacement", run, read)
+			},
+		},
+		{
+			name: "release",
+			mutate: func(run func(mayaHostConfig, string) (remoteHostLockResult, error), read func(mayaHostConfig, string) (remoteHostLockResult, error)) error {
+				return removeRemoteHostLockWithTransport(mayaHostConfig{}, "host.lock", "expected", run, read)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutations := 0
+			run := func(mayaHostConfig, string) (remoteHostLockResult, error) {
+				mutations++
+				return remoteHostLockResult{}, errSSHCommandTimedOut
+			}
+			read := func(mayaHostConfig, string) (remoteHostLockResult, error) {
+				return remoteHostLockResult{}, errors.New("Host Lock unreadable")
+			}
+
+			err := test.mutate(run, read)
+			if !errors.Is(err, errSSHCommandTimedOut) || mutations != 1 {
+				t.Fatalf("unproven timeout = err %v mutations %d; want one fail-closed attempt", err, mutations)
+			}
+		})
+	}
+}
+
 func TestSessiondStatusMustExplicitlyProveEveryProcessInactive(t *testing.T) {
 	stopped := sessiondStatusResult{HasState: true, DerivedStatus: "stopped", ProcessAlive: map[string]bool{"daemon": false, "maya": false, "mcp": false}}
 	stopped.State.Status = "stopped"
