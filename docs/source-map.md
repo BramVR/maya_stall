@@ -95,6 +95,8 @@ descriptive; code is the source-backed check when behavior claims disagree.
   `internal/cli/windows_desktop_capture.go`
 - Evidence Bundle publishing, filesystem Evidence Store copying, URL generation,
   artifact manifest, and review comment markdown: `internal/cli/publish.go`
+- Typed Evidence Report projection, deterministic static HTML rendering,
+  finalization, and read-only report command: `internal/cli/report.go`
 - GitHub and GitLab Review Comment rendering, marker handling, platform clients,
   dry-run behavior, and token env handling: `internal/cli/review_comment.go`
 - Review comment tests: `internal/cli/review_comment_test.go`

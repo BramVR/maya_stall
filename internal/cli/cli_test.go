@@ -468,6 +468,27 @@ func TestAttachRunScreenshotCapturesThroughOwnedHostLock(t *testing.T) {
 		t.Fatalf("run-scoped screenshot bundle provenance events: %v", err)
 	}
 	requireSequencedRunEvents(t, filepath.Join(evidenceDir, evidenceEventsFileName))
+	view, err := buildEvidenceReportView(evidenceDir, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Verdict != "kept" || view.Counts.Artifacts == 0 {
+		t.Fatalf("run-scoped report did not refresh kept evidence: %+v", view)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"stop", runID}, &stdout, &stderr, dir, "test-version"); code != 0 {
+		t.Fatalf("stop kept run exit = %d; stdout: %s stderr: %s", code, stdout.String(), stderr.String())
+	}
+	bundle = readEvidenceBundle(t, evidenceDir)
+	view, err = buildEvidenceReportView(evidenceDir, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Verdict != "passed" || view.Lifecycle != "completed" || view.Cleanup != "completed" {
+		t.Fatalf("stopped run report terminal truth = %+v", view)
+	}
 }
 
 func TestAttachRunScreenshotUsesAuthoritativeHostLockWithoutLocalMirror(t *testing.T) {
@@ -1447,6 +1468,15 @@ scenarios:
 	bundle.Scenario = "smoke [scenario](https://evil.test)"
 	if err := writeJSONFile(filepath.Join(evidence, "evidence.json"), bundle); err != nil {
 		t.Fatalf("write malicious evidence metadata: %v", err)
+	}
+	var manifest runManifest
+	readJSONFile(t, filepath.Join(evidence, evidenceManifestFileName), &manifest)
+	manifest.Scenario = bundle.Scenario
+	if err := writeJSONFile(filepath.Join(evidence, evidenceManifestFileName), manifest); err != nil {
+		t.Fatalf("write matching malicious manifest metadata: %v", err)
+	}
+	if _, err := finalizeEvidenceReport(evidence, reportTerminalState{}); err != nil {
+		t.Fatalf("refresh report with malicious metadata: %v", err)
 	}
 	store := filepath.Join(t.TempDir(), "store")
 

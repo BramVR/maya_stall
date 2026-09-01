@@ -26,6 +26,7 @@ The bundle includes:
 
 - `evidence.json`
 - `manifest.json`
+- `report.html`
 - Scenario Result JSON
 - events and logs
 - Visual Evidence artifacts
@@ -35,7 +36,15 @@ Validator failures are recorded in `evidence.json` and mark the run failed.
 Like `maya-stall run`, collection accepts an identified Scenario before config,
 host, or remote validation and preserves early failures as minimal Evidence
 Bundles. `--json` emits the same `run-accepted`, terminal `run`, and
-pre-acceptance `usage-error` record shapes.
+pre-acceptance `usage-error` record shapes. Terminal run JSON includes the same
+typed report projection used to render `report.html`.
+
+`report.html` is a deterministic, self-contained, offline summary. It shows the
+verdict, failure diagnosis, workflow, assertions, measurements, Validators,
+artifact inventory, integrity metadata, cleanup state, and an actionable next
+command. Missing or truncated evidence is explicit. The report has no scripts,
+external assets, or absolute file links. The final `manifest.json` records its
+relative path, media type, byte size, and SHA-256.
 
 Every Visual Evidence artifact carries Visual Evidence Provenance in
 `evidence.json`: an `origin` value plus a `sha256` content hash computed at
@@ -65,6 +74,21 @@ controller so the Evidence artifact remains PNG without doing lossless
 compression beside Maya. Recording uses 10 seconds at 15 fps by default and is
 encoded locally with `ffmpeg`.
 
+## report
+
+`maya-stall evidence report` renders an existing Evidence Bundle to an explicit
+path without changing the verified bundle:
+
+```sh
+maya-stall evidence report \
+  --output /tmp/maya-stall-report.html \
+  artifacts/maya-stall/<run-id>
+```
+
+The output path must be outside the source Evidence Bundle. The command reads
+versioned bundle data tolerantly and produces the same bytes as the stored
+report for the same canonical inputs.
+
 ## publish
 
 `maya-stall evidence publish` copies one Evidence Bundle to a filesystem
@@ -82,14 +106,16 @@ Publishing writes:
 ```text
 <destination>/<run-id>/artifact-manifest.json
 <destination>/<run-id>/review-comment.md
+<destination>/<run-id>/report.html
 ```
 
 Publishing the same run again replaces the previous published run directory so
 stale files do not survive.
 
+Publication verifies the report's recorded size and SHA-256 before copying it.
 `artifact-manifest.json` carries each Visual Evidence artifact's `origin` and
 `sha256` through from the Evidence Bundle, so published manifests match bundle
-manifests.
+manifests. The published report is the primary reviewer detail link.
 
 ## live proof artifact
 

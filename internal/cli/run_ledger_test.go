@@ -1643,6 +1643,17 @@ func TestAutomaticCleanupPreservesRunStateWhenTerminalLedgerCheckpointFails(t *t
 	if result.code == 0 {
 		t.Fatalf("run unexpectedly succeeded; stdout: %s stderr: %s", result.stdout, result.stderr)
 	}
+	bundleDir := filepath.Join(dir, "artifacts", "maya-stall", runID)
+	if _, err := os.Stat(filepath.Join(bundleDir, evidenceReportFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("report remained authoritative after terminal ledger durability failure: %v", err)
+	}
+	bundle, err := readEvidenceBundleFile(bundleDir)
+	if err != nil {
+		t.Fatalf("read ledger-failing Evidence Bundle: %v", err)
+	}
+	if bundle.Status != resultStatusFailed || bundle.Failure == nil || !strings.Contains(bundle.Failure.Diagnostic, "run ledger") {
+		t.Fatalf("ledger-failing Evidence Bundle = %+v", bundle)
+	}
 	if _, err := os.Stat(filepath.Join(dir, ".maya-stall", "state", "runs", runID)); err != nil {
 		t.Fatalf("Run State removed before terminal ledger durability: %v", err)
 	}

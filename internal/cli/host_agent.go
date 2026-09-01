@@ -2140,19 +2140,15 @@ func (handler *controlPlaneHandler) quarantineHostAgentCleanupFailure(assignment
 }
 
 func writeControlPlaneCleanupFailureEvidence(repoDir string, runID string, failure *runFailureEvidence) error {
-	path := filepath.Join(repoDir, "artifacts", "maya-stall", runID, evidenceBundleFileName)
-	content, err := os.ReadFile(path)
+	bundleDir := filepath.Join(repoDir, "artifacts", "maya-stall", runID)
+	_, err := finalizeEvidenceReportWithBundleMutation(bundleDir, reportTerminalState{Lifecycle: "cleanup-failed", Cleanup: "failed", Confidentiality: "private"}, func(bundle *evidenceBundle) {
+		bundle.Status = resultStatusFailed
+		bundle.Failure = failure
+	})
 	if err != nil {
-		return err
+		return errors.Join(err, invalidateEvidenceReport(bundleDir))
 	}
-	var bundle evidenceBundle
-	if err := json.Unmarshal(content, &bundle); err != nil {
-		return err
-	}
-	bundle.Status = resultStatusFailed
-	bundle.Failure = failure
-	bundle.Artifacts = buildEvidenceBundleCatalog(bundle)
-	return writeJSONFile(path, bundle)
+	return nil
 }
 
 func sameLockToken(got string, want string) bool {
@@ -3472,4 +3468,5 @@ func sanitizeHostAgentTerminal(terminal *runCommandJSON, privateRoots []string) 
 	for index := range terminal.FollowUpCommands {
 		terminal.FollowUpCommands[index] = sanitizer.sanitize(terminal.FollowUpCommands[index])
 	}
+	sanitizeReportViewText(terminal.Report, sanitizer.sanitize)
 }

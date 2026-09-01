@@ -153,6 +153,7 @@ type runOutcome struct {
 	Failure           *runFailureEvidence
 	DurabilityWarning string
 	Warnings          []string
+	Report            *reportView
 }
 
 type runManifest struct {
@@ -165,6 +166,7 @@ type runManifest struct {
 	BrokerSession *brokerSessionIdentity `json:"brokerSession,omitempty"`
 	ConfigPath    string                 `json:"configPath"`
 	Payload       []manifestPayload      `json:"payload"`
+	Report        *evidenceArtifact      `json:"report,omitempty"`
 }
 
 type manifestPayload struct {
@@ -199,24 +201,29 @@ type scenarioResultDocument struct {
 }
 
 type evidenceBundle struct {
-	Version        int                      `json:"version"`
-	RunID          string                   `json:"runId"`
-	Scenario       string                   `json:"scenario"`
-	Status         string                   `json:"status"`
-	TargetProfile  string                   `json:"targetProfile"`
-	Host           string                   `json:"host"`
-	Runtime        runtimeMetadata          `json:"runtime"`
-	BrokerSession  *brokerSessionIdentity   `json:"brokerSession,omitempty"`
-	Manifest       string                   `json:"manifest"`
-	Events         string                   `json:"events"`
-	Log            string                   `json:"log"`
-	ScenarioResult string                   `json:"scenarioResult,omitempty"`
-	Payload        []manifestPayload        `json:"payload"`
-	VisualEvidence []visualEvidenceArtifact `json:"visualEvidence,omitempty"`
-	Outputs        []outputArtifact         `json:"outputs,omitempty"`
-	Artifacts      []evidenceArtifact       `json:"artifacts,omitempty"`
-	Validators     []validatorResult        `json:"validators,omitempty"`
-	Failure        *runFailureEvidence      `json:"failure,omitempty"`
+	Version              int                      `json:"version"`
+	RunID                string                   `json:"runId"`
+	Scenario             string                   `json:"scenario"`
+	Status               string                   `json:"status"`
+	TargetProfile        string                   `json:"targetProfile"`
+	Host                 string                   `json:"host"`
+	Runtime              runtimeMetadata          `json:"runtime"`
+	BrokerSession        *brokerSessionIdentity   `json:"brokerSession,omitempty"`
+	Manifest             string                   `json:"manifest"`
+	Events               string                   `json:"events"`
+	Log                  string                   `json:"log"`
+	ScenarioResult       string                   `json:"scenarioResult,omitempty"`
+	Payload              []manifestPayload        `json:"payload"`
+	VisualEvidence       []visualEvidenceArtifact `json:"visualEvidence,omitempty"`
+	Outputs              []outputArtifact         `json:"outputs,omitempty"`
+	Artifacts            []evidenceArtifact       `json:"artifacts,omitempty"`
+	Validators           []validatorResult        `json:"validators,omitempty"`
+	Failure              *runFailureEvidence      `json:"failure,omitempty"`
+	LifecycleState       string                   `json:"lifecycleState,omitempty"`
+	CleanupState         string                   `json:"cleanupState,omitempty"`
+	ConfidentialityState string                   `json:"confidentialityState,omitempty"`
+	NextCommand          string                   `json:"nextCommand,omitempty"`
+	Report               *evidenceArtifact        `json:"report,omitempty"`
 }
 
 type runFailureEvidence struct {
@@ -925,7 +932,11 @@ func writeEvidenceBundle(context runContext, manifest runManifest, scenario scen
 		Validators:     validators,
 	}
 	bundle.Artifacts = buildEvidenceBundleCatalog(bundle)
-	return writeJSONFile(filepath.Join(context.EvidenceDir, evidenceBundleFileName), bundle)
+	if err := writeJSONFile(filepath.Join(context.EvidenceDir, evidenceBundleFileName), bundle); err != nil {
+		return err
+	}
+	_, err = finalizeEvidenceReport(context.EvidenceDir, reportTerminalState{Lifecycle: "running", Cleanup: "pending", Confidentiality: "private"})
+	return err
 }
 
 func rejectNonBrokerVisualEvidenceForLiveProof(runtime runtimeMetadata, artifacts []visualEvidenceArtifact) error {

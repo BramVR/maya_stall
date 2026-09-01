@@ -6,6 +6,7 @@ Release history starts with `v0.1.0`.
 
 ## Unreleased
 
+- Added deterministic offline `report.html` generation for complete and minimal Evidence Bundles, one typed terminal/HTML report projection, explicit-path read-only report rendering, manifest size/hash verification, publication, and primary Review Comment links: https://github.com/BramVR/maya_stall/issues/168.
 - Added declared runtime file inputs and the Embedded Mode `local-sessiond` Windows runtime: `plan` and `run` accept repeated `--input name=absolute-file`, snapshot allowlisted files without exposing source paths in evidence, and execute through a directly invoked local `gg_mayasessiond` lifecycle with authoritative cross-checkout locking and exact-session cleanup: https://github.com/BramVR/maya_stall/issues/165.
 - Changed short-lived interactive Visual Evidence, desktop control, modal-proof, and local live-proof tasks to run at the logged-in user's limited privilege level instead of requiring an elevated Task Scheduler token.
 - Changed SSH desktop screenshot capture to stage its long PowerShell controller as a run-owned file and invoke it with a short streamed command instead of approaching the Windows default-shell command-line limit, wait for an explicit completed-image marker instead of racing a partially written file, encode a lower-memory JPEG on the Windows Maya Host, and transcode it to the required PNG on the controller while preserving the PNG Evidence contract.

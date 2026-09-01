@@ -167,7 +167,7 @@ func captureStandaloneVisualEvidence(repoDir string, options visualEvidenceOptio
 		return runOutcome{}, visualEvidenceArtifact{}, err
 	}
 	cleanupState = false
-	return runOutcome{
+	outcome = runOutcome{
 		RunID:         runID,
 		Scenario:      manifest.Scenario,
 		TargetProfile: host.TargetProfile,
@@ -176,7 +176,11 @@ func captureStandaloneVisualEvidence(repoDir string, options visualEvidenceOptio
 		EvidenceDir:   context.EvidenceDir,
 		Result:        result,
 		StopPolicy:    "stopped",
-	}, artifact, nil
+	}
+	if _, err := finalizeEvidenceReport(context.EvidenceDir, reportTerminalStateForOutcome(outcome)); err != nil {
+		return runOutcome{}, visualEvidenceArtifact{}, err
+	}
+	return outcome, artifact, nil
 }
 
 func collectScenarioVisualEvidence(broker sessionBroker, context runContext, scenarioName string, config evidenceConfig) ([]visualEvidenceArtifact, error) {

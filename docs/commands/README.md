@@ -1,7 +1,7 @@
 # Command Reference
 
 Maya Stall is a single CLI (`maya-stall`). Commands are top-level except for
-`control-plane`, `host-agent`, `evidence collect`, `evidence publish`, and
+`control-plane`, `host-agent`, `evidence collect`, `evidence report`, `evidence publish`, and
 platform-specific `review-comment` subcommands.
 
 For the command-surface overview, see [CLI](../cli.md). Keep this list in the

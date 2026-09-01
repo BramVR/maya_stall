@@ -64,7 +64,9 @@ submission, emits its Run ID, and records its first event before Repo Run Config
 validation, host selection, or remote checks. A later failure exits `1` and
 still writes a minimal Evidence Bundle with a versioned manifest, ordered
 events, failed layer, diagnostic, remediation hint, capture state, and cleanup
-state.
+state. Complete and minimal bundles include a bounded, self-contained
+`report.html`; an initial pending report is refreshed after Stop Policy settles
+so verdict, lifecycle, cleanup, and the next command agree with terminal state.
 
 Every accepted Run ID also receives a durable Run Ledger record before Scenario
 execution. Embedded Mode stores it in the checkout; Configured Control Plane
@@ -81,7 +83,8 @@ history, events, logs, result, Evidence metadata, and cleanup state.
 Use `--json` for stable newline-delimited JSON. Accepted submissions emit an
 immediate `run-accepted` record and a terminal `run` record. A usage error emits
 one `usage-error` record. Runs that proceed use the same Run ID in Run State,
-Evidence Bundles, output, and follow-up commands.
+Evidence Bundles, output, and follow-up commands. The terminal record includes a
+typed `report` projection shared with `report.html`.
 
 The command calls the Fresh Run lifecycle, which owns this accept, setup,
 execute, and settle flow:
@@ -200,6 +203,8 @@ screenshot Visual Evidence, `run` also best-effort captures
 `screenshots/failure-desktop.png` for unrecovered failures.
 `manifest.json` and `evidence.json` record the resolved runtime profile, host
 adapter, broker adapter, broker config source, and live-proof eligibility.
+The final manifest also records `report.html` with its media type, byte size,
+and SHA-256.
 Every Visual Evidence artifact in `evidence.json` records Visual Evidence
 Provenance: an `origin` (`broker-capture`, `fake-broker-capture`, or
 `discovered`) plus a `sha256` content hash, and Session Broker captures append
