@@ -3000,6 +3000,41 @@ func TestRunSFTPBatchReconnectsAfterExit255(t *testing.T) {
 	}
 }
 
+func TestRunSFTPBatchReconnectsAfterRealExit255(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake executable proves the production SFTP command error chain")
+	}
+	dir := t.TempDir()
+	countPath := filepath.Join(dir, "attempts")
+	sftpPath := filepath.Join(dir, "fake-sftp-exit-255-once")
+	script := fmt.Sprintf(`#!/bin/sh
+count=0
+if [ -f %[1]s ]; then count=$(cat %[1]s); fi
+count=$((count + 1))
+printf '%%s\n' "$count" > %[1]s
+if [ "$count" -eq 1 ]; then
+  printf 'Connection reset by peer\n' >&2
+  exit 255
+fi
+exit 0
+`, shellQuote(countPath))
+	if err := os.WriteFile(sftpPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write reconnecting fake SFTP: %v", err)
+	}
+	host := mayaHostConfig{SSH: sshConfig{Host: "maya-alias", SFTPBinary: sftpPath}}
+	oldDelay := sftpReconnectDelay
+	sftpReconnectDelay = 0
+	t.Cleanup(func() { sftpReconnectDelay = oldDelay })
+
+	if err := runSFTPBatchWithReconnect(host, "quit\n"); err != nil {
+		t.Fatalf("production SFTP path did not reconnect after exit 255: %v", err)
+	}
+	attempts, err := os.ReadFile(countPath)
+	if err != nil || strings.TrimSpace(string(attempts)) != "2" {
+		t.Fatalf("production SFTP attempts = %q, err %v; want exactly two", attempts, err)
+	}
+}
+
 func TestRunSFTPBatchDoesNotRetryOrdinaryCollectionFailure(t *testing.T) {
 	oldDelay := sftpReconnectDelay
 	sftpReconnectDelay = 0
