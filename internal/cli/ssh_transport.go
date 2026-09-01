@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,9 @@ import (
 
 const sshCommandTimeout = 30 * time.Second
 const defaultSFTPBatchTimeout = 30 * time.Minute
+const maxSFTPBatchAttempts = 2
+
+var sftpReconnectDelay = 250 * time.Millisecond
 
 type realSSHHost struct {
 	host mayaHostConfig
@@ -536,7 +540,7 @@ func (host realSSHHost) collectArtifacts(context runContext, scenario scenarioCo
 	if batch.Empty() {
 		return nil
 	}
-	if err := runSFTPBatch(host.host, batch.String()); err != nil {
+	if err := runSFTPBatchWithReconnect(host.host, batch.String()); err != nil {
 		return fmt.Errorf("download declared outputs: %w", err)
 	}
 	return nil
@@ -585,6 +589,26 @@ func rejectSFTPRepoPath(path string) error {
 }
 
 func runSFTPBatch(host mayaHostConfig, batch string) error {
+	return runSFTPBatchAttempt(host, batch)
+}
+
+func runSFTPBatchWithReconnect(host mayaHostConfig, batch string) error {
+	return runSFTPBatchWithReconnectUsing(func() error {
+		return runSFTPBatchAttempt(host, batch)
+	})
+}
+
+func runSFTPBatchWithReconnectUsing(run func() error) error {
+	for attempt := 0; ; attempt++ {
+		err := run()
+		if err == nil || attempt+1 >= maxSFTPBatchAttempts || !isTransportExit255(err) {
+			return err
+		}
+		time.Sleep(sftpReconnectDelay)
+	}
+}
+
+func runSFTPBatchAttempt(host mayaHostConfig, batch string) error {
 	binary := host.SSH.SFTPBinary
 	if binary == "" {
 		binary = "sftp"
@@ -632,6 +656,11 @@ func runSFTPBatch(host mayaHostConfig, batch string) error {
 		return fmt.Errorf("sftp command failed: %w", err)
 	}
 	return nil
+}
+
+func isTransportExit255(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 255
 }
 
 func sftpBatchTimeout(host mayaHostConfig) (time.Duration, error) {

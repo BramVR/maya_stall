@@ -326,29 +326,73 @@ New-Item -ItemType Directory -Force -Path $root | Out-Null
 if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) { throw "schtasks.exe is required for interactive desktop control" }
 $taskName = "MayaStallDesktopClick-" + [Guid]::NewGuid().ToString("N")
 $done = Join-Path $root "desktop-click.done"
+$failed = Join-Path $root "desktop-click.failed"
 $script = Join-Path $root ($taskName + ".ps1")
 $template = @'
 $ErrorActionPreference = "Stop"
+try {
 $source = @"
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class MouseInput {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct POINT {
+    public int x;
+    public int y;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT {
+    public uint type;
+    public MOUSEINPUT mi;
+  }
   [DllImport("user32.dll", SetLastError = true)]
-  public static extern bool SetCursorPos(int X, int Y);
+  public static extern int GetSystemMetrics(int index);
   [DllImport("user32.dll", SetLastError = true)]
-  public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, UIntPtr dwExtraInfo);
+  public static extern uint SendInput(uint inputCount, INPUT[] inputs, int inputSize);
+  public static void ClickAt(int x, int y) {
+    int left = GetSystemMetrics(76);
+    int top = GetSystemMetrics(77);
+    int width = GetSystemMetrics(78);
+    int height = GetSystemMetrics(79);
+    if (width <= 1 || height <= 1 || x < left || x >= left + width || y < top || y >= top + height) {
+      throw new InvalidOperationException("desktop click coordinates are outside the interactive virtual screen");
+    }
+    int absoluteX = (int)(((long)(x - left) * 65535L) / (width - 1));
+    int absoluteY = (int)(((long)(y - top) * 65535L) / (height - 1));
+    INPUT[] inputs = new INPUT[] {
+      new INPUT { type = 0, mi = new MOUSEINPUT { dx = absoluteX, dy = absoluteY, dwFlags = 0xC001 } },
+      new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = 0x0002 } },
+      new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = 0x0004 } }
+    };
+    uint inserted = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
+    if (inserted != (uint)inputs.Length) {
+      throw new Win32Exception(Marshal.GetLastWin32Error(), "SendInput did not insert the complete desktop click");
+    }
+    // SendInput queues the batch; keep the interactive helper alive while Windows dispatches it.
+    System.Threading.Thread.Sleep(1000);
+  }
 }
 "@
 Add-Type -TypeDefinition $source
-if (-not [MouseInput]::SetCursorPos(%d, %d)) { throw "SetCursorPos failed; interactive desktop session is unavailable for desktop control" }
-Start-Sleep -Milliseconds 50
-[MouseInput]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-Start-Sleep -Milliseconds 50
-[MouseInput]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+[MouseInput]::ClickAt(%d, %d)
 Set-Content -LiteralPath "__MAYA_STALL_CLICK_DONE__" -Value "ok"
+} catch {
+  Set-Content -LiteralPath "__MAYA_STALL_CLICK_FAILED__" -Value $_.Exception.ToString()
+  exit 1
+}
 '@
 try {
-  $template.Replace("__MAYA_STALL_CLICK_DONE__", $done.Replace("\", "\\")) | Set-Content -Encoding ASCII -LiteralPath $script
+  $template.Replace("__MAYA_STALL_CLICK_DONE__", $done.Replace("\", "\\")).Replace("__MAYA_STALL_CLICK_FAILED__", $failed.Replace("\", "\\")) | Set-Content -Encoding ASCII -LiteralPath $script
   cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
   $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
   $taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
@@ -358,6 +402,7 @@ try {
   schtasks.exe /Run /TN $taskName | Out-Null
   $deadline = (Get-Date).AddSeconds(30)
   while ((Get-Date) -lt $deadline) {
+    if (Test-Path -LiteralPath $failed) { throw "scheduled interactive desktop click failed: $(Get-Content -LiteralPath $failed -Raw)" }
     if (Test-Path -LiteralPath $done) { exit 0 }
     Start-Sleep -Milliseconds 250
   }

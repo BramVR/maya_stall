@@ -144,7 +144,7 @@ jobs:
     if: needs.evaluate.outputs.hosted_ok == 'true' && needs.evaluate.outputs.current_head == 'true' && needs.evaluate.outputs.live_maya_required == 'true' && needs.evaluate.outputs.trusted_head == 'true'
     runs-on: [self-hosted, maya-live-proof]
     environment: maya-live-proof
-    timeout-minutes: 40
+    timeout-minutes: 55
     env:
       PROOF_MANIFEST: ${{ github.workspace }}/candidate/artifacts/proof/proof-manifest.json
       LIVE_PROOF_ARTIFACT_DIR: ${{ github.workspace }}/candidate/artifacts/live-visual-evidence-proof
@@ -315,7 +315,7 @@ jobs:
           set -euo pipefail
           # Persistent self-hosted runners can retain a partially written macOS test binary after cancellation.
           go clean -cache -testcache
-          go test -json ./internal/cli -run '^(TestOptInRealVisualEvidenceSmoke|TestOptInRealDesktopControlModalSmoke|TestOptInRealSSHDoctorSmoke|TestOptInRealPreRunReadinessSmoke|TestOptInRealSSHConsumingRepoSmoke|TestOptInRealSSHRunSmoke|TestOptInRealHostLockContentionAndRecoverySmoke|TestOptInRealRunScopedDesktopOpsSmoke|TestOptInRealLocalSessiondRuntimeInputSmoke)$' -count=1 -parallel=1 -timeout=30m | tee artifacts/proof/live-smoke.jsonl
+          go test -json ./internal/cli -run '^(TestOptInRealVisualEvidenceSmoke|TestOptInRealDesktopControlModalSmoke|TestOptInRealSSHDoctorSmoke|TestOptInRealPreRunReadinessSmoke|TestOptInRealSSHConsumingRepoSmoke|TestOptInRealSSHRunSmoke|TestOptInRealHostLockContentionAndRecoverySmoke|TestOptInRealRunScopedDesktopOpsSmoke|TestOptInRealLocalSessiondRuntimeInputSmoke|TestOptInRealSSHTransportSurvivesLeaseRenewalAndSFTPCollection|TestOptInRealSSHTransportMayaAcceptance)$' -count=1 -parallel=1 -timeout=45m | tee artifacts/proof/live-smoke.jsonl
 
       - name: Public artifact confidentiality gate
         id: confidentiality
@@ -372,7 +372,7 @@ jobs:
           const [manifestPath, hostConfigState, liveOutcome, confidentialityOutcome, uploadOutcome] = process.argv.slice(2);
           const smokePath = "candidate/artifacts/proof/live-smoke.jsonl";
           const artifactManifest = "candidate/artifacts/live-visual-evidence-proof/proof-artifact-manifest.json";
-          const expected = new Set(["TestOptInRealVisualEvidenceSmoke", "TestOptInRealDesktopControlModalSmoke", "TestOptInRealSSHDoctorSmoke", "TestOptInRealPreRunReadinessSmoke", "TestOptInRealSSHConsumingRepoSmoke", "TestOptInRealSSHRunSmoke", "TestOptInRealHostLockContentionAndRecoverySmoke", "TestOptInRealRunScopedDesktopOpsSmoke", "TestOptInRealLocalSessiondRuntimeInputSmoke"]);
+          const expected = new Set(["TestOptInRealVisualEvidenceSmoke", "TestOptInRealDesktopControlModalSmoke", "TestOptInRealSSHDoctorSmoke", "TestOptInRealPreRunReadinessSmoke", "TestOptInRealSSHConsumingRepoSmoke", "TestOptInRealSSHRunSmoke", "TestOptInRealHostLockContentionAndRecoverySmoke", "TestOptInRealRunScopedDesktopOpsSmoke", "TestOptInRealLocalSessiondRuntimeInputSmoke", "TestOptInRealSSHTransportSurvivesLeaseRenewalAndSFTPCollection", "TestOptInRealSSHTransportMayaAcceptance"]);
           const passed = new Set();
           const skipped = new Set();
           if (fs.existsSync(smokePath)) for (const line of fs.readFileSync(smokePath, "utf8").split(/\r?\n/)) {
@@ -383,10 +383,10 @@ jobs:
           }
           const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
           let status = "passed";
-          let detail = "all nine live smoke tests passed in one process";
+          let detail = "all eleven live smoke tests passed in one process";
           if (hostConfigState !== "present") [status, detail] = ["failed_missing_host_config", "live Maya host config missing"];
           else if (liveOutcome !== "success") [status, detail] = [`failed_${liveOutcome}`, "live smoke command failed"];
-          else if (passed.size !== expected.size || skipped.size) [status, detail] = ["failed_missing_smoke_tests", "all nine individual live smoke tests must pass without skips"];
+          else if (passed.size !== expected.size || skipped.size) [status, detail] = ["failed_missing_smoke_tests", "all eleven individual live smoke tests must pass without skips"];
           else if (!fs.existsSync(artifactManifest)) [status, detail] = ["failed_missing_visual_evidence_proof_artifact", "live Visual Evidence proof artifact manifest missing"];
           else if (confidentialityOutcome !== "success") [status, detail] = ["failed_visual_evidence_proof_confidentiality", "live Visual Evidence proof confidentiality failed"];
           else if (uploadOutcome !== "success") [status, detail] = ["failed_visual_evidence_proof_upload", "live Visual Evidence proof upload failed"];

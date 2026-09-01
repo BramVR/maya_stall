@@ -168,13 +168,12 @@ func TestOptInRealSSHRunSmoke(t *testing.T) {
 		t.Fatalf("real SSH retention attach missing broker/local evidence:\n%s", attachStdout.String())
 	}
 
-	var stopStdout, stopStderr bytes.Buffer
-	stopCode := Run([]string{"stop", runID}, &stopStdout, &stopStderr, dir, "test-version")
+	stopCode, stopStdout, stopStderr := runLiveRetainedStop(t, dir, runID)
 	if stopCode != 0 {
-		t.Fatalf("real SSH retention stop exit code = %d, want 0; stdout: %s stderr: %s", stopCode, stopStdout.String(), stopStderr.String())
+		t.Fatalf("real SSH retention stop exit code = %d, want 0; stdout: %s stderr: %s", stopCode, stopStdout, stopStderr)
 	}
-	if !strings.Contains(stopStdout.String(), "stopped: "+runID) {
-		t.Fatalf("real SSH retention stop missing run id:\n%s", stopStdout.String())
+	if !strings.Contains(stopStdout, "stopped: "+runID) {
+		t.Fatalf("real SSH retention stop missing run id:\n%s", stopStdout)
 	}
 	restoreLiveSessionBrokerFixture(t, host)
 	t.Run("shared Host Agent path", runOptInRealSharedHostAgentRunSmoke)
@@ -247,6 +246,230 @@ func TestOptInRealHostLockContentionAndRecoverySmoke(t *testing.T) {
 	}
 	time.Sleep(3 * time.Second)
 	runHostLockController(t, options, contenderDir, "acquire-release", "lease-recovery-successor", "", "")
+}
+
+func TestOptInRealSSHTransportSurvivesLeaseRenewalAndSFTPCollection(t *testing.T) {
+	options, ok := realSSHSmokeOptionsFromEnv(t)
+	if !ok {
+		return
+	}
+	options.Host = liveSmokeHostForContention(t, options)
+	host := liveSmokeHostConfigByID(t, options, options.Host)
+	lockLayer := remoteHostLockLayer(host)
+	if lockLayer.Status != "ok" || lockLayer.State != "unlocked" {
+		t.Fatalf("transport smoke requires an unlocked Maya Host: %+v", lockLayer)
+	}
+	broker := ggMayaSessiondBroker{host: host}
+	before, err := broker.status()
+	if err != nil {
+		t.Fatalf("inspect Session Broker before transport smoke: %v", err)
+	}
+	if sessiondSessionLooksActive(before) {
+		t.Fatalf("transport smoke refuses to overlap active broker session %q", before.State.SessionID)
+	}
+
+	oldLease := hostSideLockLeaseDuration
+	oldHeartbeat := hostSideLockHeartbeatInterval
+	hostSideLockLeaseDuration = 8 * time.Second
+	hostSideLockHeartbeatInterval = time.Second
+	t.Cleanup(func() {
+		hostSideLockLeaseDuration = oldLease
+		hostSideLockHeartbeatInterval = oldHeartbeat
+	})
+
+	repoDir := t.TempDir()
+	runID := fmt.Sprintf("transport-smoke-%d", time.Now().UnixNano())
+	workspace, err := newRunWorkspace(repoDir, runID, host.WorkRoot, "outputs/result.json")
+	if err != nil {
+		t.Fatalf("create transport smoke workspace: %v", err)
+	}
+	context := runContext{RepoDir: repoDir, RunWorkspace: workspace, Workspace: workspace.LocalWorkspace()}
+	if err := os.MkdirAll(context.Workspace, 0o755); err != nil {
+		t.Fatalf("create local transport smoke workspace: %v", err)
+	}
+	lock, locked, err := acquireRunHostLock(repoDir, host)
+	if err != nil || locked {
+		t.Fatalf("acquire transport smoke Host Lock: locked=%t err=%v", locked, err)
+	}
+	released := false
+	t.Cleanup(func() {
+		_ = broker.CleanupRun(context)
+		if !released {
+			_ = lock.release()
+		}
+	})
+	if err := lock.markActive(runID); err != nil {
+		t.Fatalf("mark transport smoke Host Lock active: %v", err)
+	}
+	stopHeartbeat, checkHeartbeat := startHostLockHeartbeat(lock.renew)
+	heartbeatStopped := false
+	t.Cleanup(func() {
+		if !heartbeatStopped {
+			if err := stopHeartbeat(); err != nil {
+				t.Errorf("cleanup transport smoke Host Lock heartbeat: %v", err)
+			}
+		}
+	})
+
+	remoteResult := workspace.RemoteScenarioResultPath()
+	remoteScript := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+$result = %s
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $result) | Out-Null
+[System.IO.File]::WriteAllText($result, '{"status":"passed","summary":"transport smoke"}', [System.Text.Encoding]::UTF8)
+Start-Sleep -Seconds 12
+Write-Output 'transport-scenario-complete'`, powerShellSingleQuoted(remoteResult))
+	if _, err := runSSHCommandOutput(host, encodedPowerShellCommand(remoteScript), 30*time.Second); err != nil {
+		t.Fatalf("long transport smoke operation failed: %v; private classification: %s", err, sshFailureClassificationText(err))
+	}
+	if err := checkHeartbeat(); err != nil {
+		t.Fatalf("Host Lock renewal failed during long transport smoke: %v; private classification: %s", err, sshFailureClassificationText(err))
+	}
+	scenario := scenarioContract{
+		ScenarioResultPath: "outputs/result.json",
+		Outputs:            []scenarioOutputPath{{Path: "outputs/result.json"}},
+	}
+	if err := (realSSHHost{host: host}).CollectArtifacts(context, scenario); err != nil {
+		t.Fatalf("collect transport smoke output over SFTP: %v; private classification: %s", err, sshFailureClassificationText(err))
+	}
+	resultBytes, err := os.ReadFile(workspace.LocalScenarioResultPath())
+	if err != nil || !bytes.Contains(resultBytes, []byte(`"status":"passed"`)) {
+		t.Fatalf("collected transport smoke Scenario Result = %q, err %v", resultBytes, err)
+	}
+	if err := stopHeartbeat(); err != nil {
+		t.Fatalf("stop transport smoke Host Lock heartbeat: %v", err)
+	}
+	heartbeatStopped = true
+	if err := broker.CleanupRun(context); err != nil {
+		t.Fatalf("clean transport smoke remote workspace: %v", err)
+	}
+	if err := lock.release(); err != nil {
+		t.Fatalf("release transport smoke Host Lock: %v", err)
+	}
+	released = true
+
+	lockLayer = remoteHostLockLayer(host)
+	if lockLayer.Status != "ok" || lockLayer.State != "unlocked" {
+		t.Fatalf("transport smoke retained Host Lock: %+v", lockLayer)
+	}
+	after, err := broker.status()
+	if err != nil {
+		t.Fatalf("inspect Session Broker after transport smoke: %v", err)
+	}
+	if sessiondSessionLooksActive(after) || after.State.SessionID != before.State.SessionID {
+		t.Fatalf("transport smoke changed Maya UI Session ownership: before=%q after=%q active=%t", before.State.SessionID, after.State.SessionID, sessiondSessionLooksActive(after))
+	}
+	probe := fmt.Sprintf(`if (Test-Path -LiteralPath %s) { Write-Output 'present' } else { Write-Output 'missing' }`, powerShellSingleQuoted(workspace.RemoteRunRoot()))
+	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(probe), sshCommandTimeout)
+	if err != nil || strings.TrimSpace(string(raw)) != "missing" {
+		t.Fatalf("transport smoke remote workspace cleanup: output=%q err=%v", raw, err)
+	}
+}
+
+func TestOptInRealSSHTransportMayaAcceptance(t *testing.T) {
+	options, ok := realSSHSmokeOptionsFromEnv(t)
+	if !ok {
+		return
+	}
+	options.Host = liveSmokeHostForContention(t, options)
+	host := liveSmokeHostConfigByID(t, options, options.Host)
+	lockLayer := remoteHostLockLayer(host)
+	if lockLayer.Status != "ok" || lockLayer.State != "unlocked" {
+		t.Fatalf("transport acceptance requires an unlocked Maya Host: %+v", lockLayer)
+	}
+	broker := ggMayaSessiondBroker{host: host}
+	before, err := broker.status()
+	if err != nil {
+		t.Fatalf("inspect Session Broker before transport acceptance: %v", err)
+	}
+	if sessiondSessionLooksActive(before) {
+		t.Fatalf("transport acceptance refuses to overlap active broker session %q", before.State.SessionID)
+	}
+	processes, err := mayaTasklistSessions(host)
+	if err != nil {
+		t.Fatalf("inspect Maya processes before transport acceptance: %v", err)
+	}
+	if len(processes) != 0 {
+		t.Fatalf("transport acceptance refuses to overlap %d Maya process(es): %+v", len(processes), processes)
+	}
+
+	dir := writeTransportMayaAcceptanceFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := Run(options.runArgs("transport-acceptance"), &stdout, &stderr, dir, "test-version")
+	if code != 0 {
+		t.Fatalf("real transport acceptance exit code = %d, want 0; stdout: %s stderr: %s", code, stdout.String(), stderr.String())
+	}
+	runID := smokeOutputValue(stdout.String(), "run")
+	evidenceDir := smokeOutputValue(stdout.String(), "evidence")
+	if runID == "" || evidenceDir == "" {
+		t.Fatalf("real transport acceptance output missing Run ID or Evidence Bundle path:\n%s", stdout.String())
+	}
+
+	// Scenario Result is the primary domain result and must be inspected before bundle projections.
+	result, found, err := readScenarioResultDocument(filepath.Join(evidenceDir, evidenceScenarioResultFileName))
+	if err != nil || !found {
+		t.Fatalf("read collected transport acceptance Scenario Result: found=%t err=%v", found, err)
+	}
+	if result.Result.Status != resultStatusPassed || result.Result.Summary != "transport acceptance completed" {
+		t.Fatalf("transport acceptance Scenario Result = %+v", result.Result)
+	}
+	heldSeconds, ok := result.Fields["heldSeconds"].(json.Number)
+	if !ok {
+		t.Fatalf("transport acceptance Scenario Result heldSeconds = %#v", result.Fields["heldSeconds"])
+	}
+	held, err := heldSeconds.Float64()
+	if err != nil || held < 65 {
+		t.Fatalf("transport acceptance duration = %v seconds, want at least 65", result.Fields["heldSeconds"])
+	}
+
+	bundle := readEvidenceBundle(t, evidenceDir)
+	if bundle.RunID != runID || bundle.Scenario != "transport-acceptance" || bundle.Status != resultStatusPassed || bundle.Failure != nil {
+		t.Fatalf("transport acceptance Evidence Bundle = %+v", bundle)
+	}
+	if bundle.Runtime.Profile != "ssh-sessiond" || !bundle.Runtime.LiveProofEligible || bundle.BrokerSession == nil || bundle.BrokerSession.SessionID == "" {
+		t.Fatalf("transport acceptance runtime/session proof = runtime %+v session %+v", bundle.Runtime, bundle.BrokerSession)
+	}
+	for _, relative := range []string{bundle.Manifest, bundle.Events, bundle.Log, bundle.ScenarioResult} {
+		if relative == "" {
+			t.Fatal("transport acceptance Evidence Bundle has an empty required path")
+		}
+		if _, err := os.Stat(filepath.Join(evidenceDir, filepath.FromSlash(relative))); err != nil {
+			t.Fatalf("transport acceptance Evidence Bundle missing %s: %v", relative, err)
+		}
+	}
+	logBytes, err := os.ReadFile(filepath.Join(evidenceDir, filepath.FromSlash(bundle.Log)))
+	if err != nil || !bytes.Contains(logBytes, []byte("gg_mayasessiond Session Broker ran Scenario")) {
+		t.Fatalf("transport acceptance log = %q, err %v", logBytes, err)
+	}
+	eventsBytes, err := os.ReadFile(filepath.Join(evidenceDir, filepath.FromSlash(bundle.Events)))
+	if err != nil || !bytes.Contains(eventsBytes, []byte(`"type":"broker.session.finished"`)) {
+		t.Fatalf("transport acceptance events missing completed broker session: err=%v", err)
+	}
+
+	lockLayer = remoteHostLockLayer(host)
+	if lockLayer.Status != "ok" || lockLayer.State != "unlocked" {
+		t.Fatalf("transport acceptance retained Host Lock: %+v", lockLayer)
+	}
+	after, err := broker.status()
+	if err != nil {
+		t.Fatalf("inspect Session Broker after transport acceptance: %v", err)
+	}
+	if err := freshRunStoppedProofError(after, bundle.BrokerSession); err != nil {
+		t.Fatalf("transport acceptance session cleanup for evidence session %q: %v", bundle.BrokerSession.SessionID, err)
+	}
+	processes, err = mayaTasklistSessions(host)
+	if err != nil || len(processes) != 0 {
+		t.Fatalf("transport acceptance Maya process cleanup: count=%d processes=%+v err=%v", len(processes), processes, err)
+	}
+	workspace, err := newRunWorkspace(dir, runID, host.WorkRoot, "outputs/result.json")
+	if err != nil {
+		t.Fatalf("resolve transport acceptance workspace: %v", err)
+	}
+	probe := fmt.Sprintf(`if (Test-Path -LiteralPath %s) { Write-Output 'present' } else { Write-Output 'missing' }`, powerShellSingleQuoted(workspace.RemoteRunRoot()))
+	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(probe), sshCommandTimeout)
+	if err != nil || strings.TrimSpace(string(raw)) != "missing" {
+		t.Fatalf("transport acceptance remote workspace cleanup: output=%q err=%v", raw, err)
+	}
+	t.Logf("transport acceptance Run %s collected a passed Evidence Bundle after %.1f seconds and completed exact host cleanup", runID, held)
 }
 
 func TestHostLockControllerHelper(t *testing.T) {
@@ -380,6 +603,11 @@ func runKLVPushConsumingRepoSmoke(t *testing.T, options realSSHSmokeOptions) {
 	doctorOptions := options.doctorOptions()
 	doctorOptions.ScenarioName = "klv-push-smoke"
 	report := runDoctor(dir, doctorOptions)
+	if liveHostHealthHasOnlyTransientSSHTimeout(report) {
+		t.Logf("retrying consuming-repo Host Health once after transient SSH timeout: %s", formatHostHealthReport(report))
+		time.Sleep(2 * time.Second)
+		report = runDoctor(dir, doctorOptions)
+	}
 	assertLiveHostHealthProof(t, report)
 	t.Logf("Host Health: %s", formatHostHealthReport(report))
 
@@ -416,6 +644,88 @@ func runKLVPushConsumingRepoSmoke(t *testing.T, options realSSHSmokeOptions) {
 	}
 	if !strings.Contains(publishStdout.String(), "url: https://evidence.example.invalid/maya-stall/") {
 		t.Fatalf("evidence publish did not print review-ready URL:\n%s", publishStdout.String())
+	}
+}
+
+func liveHostHealthHasOnlyTransientSSHTimeout(report hostHealthReport) bool {
+	if report.Healthy {
+		return false
+	}
+	lockClear := false
+	timedOut := false
+	for _, layer := range report.Layers {
+		if layer.ID == "host-lock" {
+			lockClear = layer.Status == "ok" && layer.State == "unlocked"
+		}
+		if layer.Status != "fail" {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(layer.Detail), "ssh command timed out") {
+			return false
+		}
+		timedOut = true
+	}
+	return lockClear && timedOut
+}
+
+func runLiveRetainedStop(t *testing.T, dir string, runID string) (int, string, string) {
+	t.Helper()
+	for attempt := 0; attempt < 2; attempt++ {
+		var stdout, stderr bytes.Buffer
+		code := Run([]string{"stop", runID}, &stdout, &stderr, dir, "test-version")
+		if code == 0 || attempt > 0 || !liveRetainedStopHasOnlyTransientSSHTimeout(code, stdout.String(), stderr.String()) {
+			return code, stdout.String(), stderr.String()
+		}
+		t.Logf("retrying exact retained-run stop once after transient SSH timeout for run %s", runID)
+		time.Sleep(2 * time.Second)
+	}
+	panic("unreachable")
+}
+
+func liveRetainedStopHasOnlyTransientSSHTimeout(code int, stdout string, stderr string) bool {
+	return code == 1 &&
+		strings.TrimSpace(stdout) == "" &&
+		strings.Contains(strings.ToLower(stderr), "maya-stall stop: ssh command timed out after ")
+}
+
+func TestLiveHostHealthTransientSSHTimeoutRetryScope(t *testing.T) {
+	report := hostHealthReport{Layers: []hostHealthLayer{
+		{ID: "host-lock", Status: "ok", State: "unlocked"},
+		{ID: "session-broker", Status: "fail", Detail: "ssh command timed out after 30s"},
+	}}
+	if !liveHostHealthHasOnlyTransientSSHTimeout(report) {
+		t.Fatal("an unlocked host with only SSH timeout failures should receive one bounded retry")
+	}
+	report.Layers[1].Detail = "authentication failed"
+	if liveHostHealthHasOnlyTransientSSHTimeout(report) {
+		t.Fatal("non-timeout health failures must not be retried")
+	}
+	report.Layers[1].Detail = "ssh command timed out after 30s"
+	report.Layers[0].State = "locked"
+	if liveHostHealthHasOnlyTransientSSHTimeout(report) {
+		t.Fatal("a non-clear Host Lock must never be retried as transient SSH transport")
+	}
+}
+
+func TestLiveRetainedStopTransientSSHTimeoutRetryScope(t *testing.T) {
+	if !liveRetainedStopHasOnlyTransientSSHTimeout(1, "", "maya-stall stop: ssh command timed out after 30s\n") {
+		t.Fatal("an exact retained-run stop SSH timeout should receive one bounded retry")
+	}
+	for name, testCase := range map[string]struct {
+		code   int
+		stdout string
+		stderr string
+	}{
+		"success":        {code: 0},
+		"partial output": {code: 1, stdout: "stopped: run-id\n", stderr: "maya-stall stop: ssh command timed out after 30s\n"},
+		"authentication": {code: 1, stderr: "maya-stall stop: authentication failed\n"},
+		"ownership":      {code: 1, stderr: "maya-stall stop: Host Lock ownership changed\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if liveRetainedStopHasOnlyTransientSSHTimeout(testCase.code, testCase.stdout, testCase.stderr) {
+				t.Fatal("non-transient or ambiguous retained-run stop result must not be retried")
+			}
+		})
 	}
 }
 
@@ -592,6 +902,51 @@ scenarios:
       scenarioResult: "outputs/retention-result.json"
     evidence:
       screenshots:
+        enabled: false
+    validators:
+      - type: scenarioResultStatus
+        status: passed
+`)
+	return dir
+}
+
+func writeTransportMayaAcceptanceFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "maya", "transport_acceptance.py"), `import json
+import os
+import time
+
+started = time.monotonic()
+time.sleep(70)
+held_seconds = time.monotonic() - started
+result_path = os.environ["MAYA_STALL_SCENARIO_RESULT"]
+os.makedirs(os.path.dirname(result_path), exist_ok=True)
+with open(result_path, "w", encoding="utf-8") as handle:
+    json.dump({
+        "status": "passed",
+        "summary": "transport acceptance completed",
+        "heldSeconds": held_seconds,
+    }, handle)
+    handle.write("\n")
+`)
+	mustWriteFile(t, filepath.Join(dir, ".maya-stall.yaml"), `version: 1
+scenarios:
+  transport-acceptance:
+    description: "Minimal live Maya transport acceptance Scenario."
+    requirements:
+      maya:
+        minimum: "2025"
+    payload:
+      scripts:
+        - "maya/transport_acceptance.py"
+    expectedOutputs:
+      files: []
+      scenarioResult: "outputs/result.json"
+    evidence:
+      screenshots:
+        enabled: false
+      recording:
         enabled: false
     validators:
       - type: scenarioResultStatus
