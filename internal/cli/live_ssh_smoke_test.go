@@ -615,13 +615,9 @@ func smokeOutputValue(output string, key string) string {
 
 func assertLiveSmokeEvidenceBundle(t *testing.T, evidenceDir string) evidenceBundle {
 	t.Helper()
-	content, err := os.ReadFile(filepath.Join(evidenceDir, "evidence.json"))
+	bundle, err := readEvidenceBundleFile(evidenceDir)
 	if err != nil {
 		t.Fatalf("read Evidence Bundle: %v", err)
-	}
-	var bundle evidenceBundle
-	if err := json.Unmarshal(content, &bundle); err != nil {
-		t.Fatalf("parse Evidence Bundle: %v", err)
 	}
 	if bundle.Status != resultStatusPassed {
 		t.Fatalf("Evidence Bundle status = %q, want %q", bundle.Status, resultStatusPassed)
