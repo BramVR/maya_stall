@@ -172,7 +172,7 @@ func renderExistingEvidenceReport(repoDir string, options evidenceReportOptions)
 	if overlap {
 		return reportView{}, "", fmt.Errorf("evidence report output must be outside the verified Evidence Bundle")
 	}
-	bundle, err := readEvidenceBundleFile(bundleDir)
+	bundle, err := readEvidenceBundleFileWithStaleReport(bundleDir, true)
 	if err != nil {
 		return reportView{}, "", err
 	}
@@ -213,7 +213,9 @@ func finalizeEvidenceReport(bundleDir string, terminal reportTerminalState) (rep
 }
 
 func finalizeEvidenceReportWithBundleMutation(bundleDir string, terminal reportTerminalState, mutate func(*evidenceBundle)) (reportView, error) {
-	bundle, err := readEvidenceBundleFile(bundleDir)
+	// A crash may leave report.html visible before the manifest grants it
+	// authority. Treat that leaf as stale here so finalization can replace it.
+	bundle, err := readEvidenceBundleFileWithStaleReport(bundleDir, true)
 	if err != nil {
 		return reportView{}, err
 	}

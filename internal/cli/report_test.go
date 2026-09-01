@@ -689,6 +689,38 @@ func TestEvidenceReportPublicationRejectsUnmanifestedReport(t *testing.T) {
 	}
 }
 
+func TestEvidenceReportFinalizationRecoversUnmanifestedCrashLeaf(t *testing.T) {
+	bundleDir := writeReportFixture(t, reportFixtureOptions{})
+	stale := []byte("<!doctype html><title>interrupted first write</title>\n")
+	mustWriteFile(t, filepath.Join(bundleDir, evidenceReportFileName), string(stale))
+
+	output := filepath.Join(t.TempDir(), "recovered.html")
+	if _, _, err := renderExistingEvidenceReport("", evidenceReportOptions{BundleDir: bundleDir, Output: output}); err != nil {
+		t.Fatalf("read-only report did not tolerate stale crash leaf: %v", err)
+	}
+	if content, err := os.ReadFile(filepath.Join(bundleDir, evidenceReportFileName)); err != nil || !bytes.Equal(content, stale) {
+		t.Fatalf("read-only report mutated stale crash leaf: content=%q err=%v", content, err)
+	}
+
+	if _, err := finalizeEvidenceReport(bundleDir, reportTerminalState{Lifecycle: "completed", Cleanup: "completed"}); err != nil {
+		t.Fatalf("finalization did not recover stale crash leaf: %v", err)
+	}
+	bundle, err := readEvidenceBundleFile(bundleDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Report == nil {
+		t.Fatal("recovered report lacks manifest authority")
+	}
+	content, err := os.ReadFile(filepath.Join(bundleDir, evidenceReportFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(content, stale) {
+		t.Fatal("finalization preserved stale crash leaf")
+	}
+}
+
 func TestEvidenceReportRejectsNonRegularReportLeafAndSafelyInvalidatesSymlink(t *testing.T) {
 	bundleDir := writeReportFixture(t, reportFixtureOptions{})
 	outside := filepath.Join(t.TempDir(), "outside.html")
@@ -776,7 +808,7 @@ func TestEvidenceReportRejectsMalformedAuthoritativeManifest(t *testing.T) {
 	}
 }
 
-func TestEvidenceReportRejectsManifestWithoutRunIdentity(t *testing.T) {
+func TestEvidenceReportStrictReadRejectsAuthorizedManifestWithoutRunIdentity(t *testing.T) {
 	bundleDir := writeReportFixture(t, reportFixtureOptions{})
 	if _, err := finalizeEvidenceReport(bundleDir, reportTerminalState{Lifecycle: "completed", Cleanup: "completed"}); err != nil {
 		t.Fatal(err)

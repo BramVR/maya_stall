@@ -143,6 +143,10 @@ func publishEvidenceBundle(repoDir string, options evidencePublishOptions) (publ
 }
 
 func readEvidenceBundleFile(bundleDir string) (evidenceBundle, error) {
+	return readEvidenceBundleFileWithStaleReport(bundleDir, false)
+}
+
+func readEvidenceBundleFileWithStaleReport(bundleDir string, allowStaleReport bool) (evidenceBundle, error) {
 	evidencePath, ok := safeBundlePath(bundleDir, evidenceBundleFileName)
 	if !ok {
 		return evidenceBundle{}, fmt.Errorf("evidence bundle metadata path is unsafe")
@@ -183,18 +187,20 @@ func readEvidenceBundleFile(bundleDir string) (evidenceBundle, error) {
 	if err := json.Unmarshal(manifestContent, &manifest); err != nil {
 		return evidenceBundle{}, fmt.Errorf("parse Evidence Bundle manifest: %w", err)
 	}
-	requireIdentity := manifest.Report != nil
+	reportAuthorized := manifest.Report != nil
+	// Manifest-authorized reports always require a bound run identity. Recovery
+	// may ignore only a physical report leaf that has no manifest authority.
+	requireIdentity := reportAuthorized
 	reportExists := false
 	if reportInfo, reportErr := os.Lstat(filepath.Join(bundleDir, evidenceReportFileName)); reportErr == nil {
 		reportExists = true
 		if !reportInfo.Mode().IsRegular() {
 			return evidenceBundle{}, fmt.Errorf("evidence bundle report must be a regular file")
 		}
-		requireIdentity = true
 	} else if !errors.Is(reportErr, os.ErrNotExist) {
 		return evidenceBundle{}, reportErr
 	}
-	if reportExists && manifest.Report == nil {
+	if reportExists && !reportAuthorized && !allowStaleReport {
 		return evidenceBundle{}, fmt.Errorf("evidence bundle report exists without manifest authority")
 	}
 	if err := validateEvidenceManifestIdentity(bundle, manifest, requireIdentity); err != nil {
