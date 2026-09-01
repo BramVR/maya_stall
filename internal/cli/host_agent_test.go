@@ -959,11 +959,12 @@ func TestSanitizeHostAgentTerminalRemovesAgentLocalPaths(t *testing.T) {
 	terminal := runCommandJSON{
 		Diagnostic: privateRoot + `\runs\run-01`, RemediationHint: privateRoot + `\host`,
 		Error: privateRoot + `\error`, FollowUpCommands: []string{privateRoot + `\follow-up`},
+		Report: &reportView{Summary: privateRoot + `\summary`},
 	}
 	sanitizeHostAgentTerminal(&terminal, []string{privateRoot})
 	for name, value := range map[string]string{
 		"diagnostic": terminal.Diagnostic, "remediation": terminal.RemediationHint,
-		"error": terminal.Error, "follow-up": terminal.FollowUpCommands[0],
+		"error": terminal.Error, "follow-up": terminal.FollowUpCommands[0], "report": terminal.Report.Summary,
 	} {
 		if strings.Contains(value, privateRoot) || !strings.Contains(value, "[agent-workspace]") {
 			t.Fatalf("sanitized %s = %q", name, value)

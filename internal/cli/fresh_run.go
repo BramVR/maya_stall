@@ -197,9 +197,67 @@ func (run *freshRunLifecycle) Run() (outcome runOutcome, err error) {
 			}
 			outcome = run.currentOutcome()
 		}
+		ledgerFinalized := false
 		if run.accepted {
-			if ledgerErr := newRunLedgerStore(run.repoDir).Finalize(outcome, run.manifest, run.ledgerPolicy, run.runtime.Now()); ledgerErr != nil {
-				err = errors.Join(err, fmt.Errorf("finalize embedded run ledger for %s: %w", run.manifest.RunID, ledgerErr))
+			ledgerErr := newRunLedgerStore(run.repoDir).Finalize(outcome, run.manifest, run.ledgerPolicy, run.runtime.Now())
+			if ledgerErr == nil {
+				ledgerFinalized = true
+			} else {
+				ledgerErr = fmt.Errorf("finalize embedded run ledger for %s: %w", run.manifest.RunID, ledgerErr)
+				err = errors.Join(err, ledgerErr)
+				terminal := reportTerminalStateForOutcome(outcome)
+				run.recordArtifactFailure(ledgerErr, "Restore writable run-ledger storage, then rerun the Scenario.", terminal.Cleanup)
+				outcome = run.currentOutcome()
+				if outcome.EvidenceDir != "" {
+					view, evidenceErr := finalizeEvidenceReportWithBundleMutation(outcome.EvidenceDir, reportTerminalStateForOutcome(outcome), run.mutateTerminalFailureEvidence)
+					if evidenceErr != nil {
+						err = errors.Join(err, fmt.Errorf("record run-ledger durability failure in Evidence Bundle: %w", evidenceErr))
+						view = reportViewFromOutcome(outcome)
+					}
+					if invalidateErr := invalidateEvidenceReport(outcome.EvidenceDir); invalidateErr != nil {
+						err = errors.Join(err, invalidateErr)
+					}
+					outcome.Report = &view
+				}
+			}
+		}
+		if run.accepted && ledgerFinalized && outcome.EvidenceDir != "" {
+			var mutate func(*evidenceBundle)
+			if run.failure != nil {
+				mutate = run.mutateTerminalFailureEvidence
+			}
+			if _, reportErr := finalizeEvidenceReportWithBundleMutation(outcome.EvidenceDir, reportTerminalStateForOutcome(outcome), mutate); reportErr != nil {
+				reportErr = fmt.Errorf("finalize static Evidence Bundle report: %w", reportErr)
+				err = errors.Join(err, reportErr)
+				terminal := reportTerminalStateForOutcome(outcome)
+				run.recordArtifactFailure(reportErr, "Restore writable Evidence Bundle storage, then rerun the Scenario.", terminal.Cleanup)
+				outcome = run.currentOutcome()
+				view, retryErr := finalizeEvidenceReportWithBundleMutation(outcome.EvidenceDir, reportTerminalStateForOutcome(outcome), run.mutateTerminalFailureEvidence)
+				if retryErr == nil {
+					outcome.Report = &view
+				} else {
+					err = errors.Join(err, fmt.Errorf("finalize artifact-failing Evidence Bundle report: %w", retryErr))
+					if invalidateErr := invalidateEvidenceReport(outcome.EvidenceDir); invalidateErr != nil {
+						err = errors.Join(err, invalidateErr)
+					}
+					view := reportViewFromOutcome(outcome)
+					outcome.Report = &view
+				}
+				if ledgerErr := newRunLedgerStore(run.repoDir).Finalize(outcome, run.manifest, run.ledgerPolicy, run.runtime.Now()); ledgerErr != nil {
+					ledgerErr = fmt.Errorf("finalize embedded run ledger after report failure for %s: %w", run.manifest.RunID, ledgerErr)
+					err = errors.Join(err, ledgerErr)
+					run.recordArtifactFailure(ledgerErr, "Restore writable run-ledger storage, then rerun the Scenario.", reportTerminalStateForOutcome(outcome).Cleanup)
+					outcome = run.currentOutcome()
+					view, evidenceErr := finalizeEvidenceReportWithBundleMutation(outcome.EvidenceDir, reportTerminalStateForOutcome(outcome), run.mutateTerminalFailureEvidence)
+					if evidenceErr != nil {
+						err = errors.Join(err, fmt.Errorf("record post-report run-ledger durability failure in Evidence Bundle: %w", evidenceErr))
+						view = reportViewFromOutcome(outcome)
+					}
+					if invalidateErr := invalidateEvidenceReport(outcome.EvidenceDir); invalidateErr != nil {
+						err = errors.Join(err, invalidateErr)
+					}
+					outcome.Report = &view
+				}
 			}
 		}
 	}()
@@ -227,6 +285,19 @@ func (run *freshRunLifecycle) Run() (outcome runOutcome, err error) {
 	}
 	outcome, err = run.settle()
 	return outcome, err
+}
+
+func (run *freshRunLifecycle) recordArtifactFailure(cause error, remediation string, cleanup string) {
+	if run.failure == nil || run.result.Status == resultStatusPassed {
+		run.failedLayer = failureLayerRunState
+		run.failure = &runFailureEvidence{
+			FailedLayer: string(failureLayerRunState), Diagnostic: cause.Error(), RemediationHint: remediation,
+			CaptureState: "completed", CleanupState: cleanup,
+		}
+	} else {
+		run.failure.Diagnostic = errors.Join(errors.New(run.failure.Diagnostic), cause).Error()
+	}
+	run.result = ScenarioResult{Status: resultStatusFailed, Summary: cause.Error()}
 }
 
 func (run *freshRunLifecycle) cancellationError() error {
@@ -824,22 +895,19 @@ func appendSequencedEvidenceEvent(path string, eventName string, detail string) 
 }
 
 func (run *freshRunLifecycle) updateTerminalFailureEvidence() error {
-	path := filepath.Join(run.context.EvidenceDir, evidenceBundleFileName)
-	content, err := os.ReadFile(path)
+	_, err := finalizeEvidenceReportWithBundleMutation(run.context.EvidenceDir, reportTerminalStateForOutcome(run.currentOutcome()), run.mutateTerminalFailureEvidence)
 	if err != nil {
-		return err
+		return errors.Join(err, invalidateEvidenceReport(run.context.EvidenceDir))
 	}
-	var bundle evidenceBundle
-	if err := json.Unmarshal(content, &bundle); err != nil {
-		return err
-	}
+	return nil
+}
+
+func (run *freshRunLifecycle) mutateTerminalFailureEvidence(bundle *evidenceBundle) {
 	if len(run.visualEvidence) > 0 {
 		bundle.VisualEvidence = mergeVisualEvidence(bundle.VisualEvidence, run.visualEvidence)
 	}
 	bundle.Status = resultStatusFailed
 	bundle.Failure = run.failure
-	bundle.Artifacts = buildEvidenceBundleCatalog(bundle)
-	return writeJSONFile(path, bundle)
 }
 
 func writeMinimalEvidenceBundle(context runContext, manifest runManifest, result ScenarioResult, failure *runFailureEvidence) error {
@@ -873,7 +941,11 @@ func writeMinimalEvidenceBundle(context runContext, manifest runManifest, result
 		Failure:       failure,
 	}
 	bundle.Artifacts = buildEvidenceBundleCatalog(bundle)
-	return writeJSONFile(filepath.Join(context.EvidenceDir, evidenceBundleFileName), bundle)
+	if err := writeJSONFile(filepath.Join(context.EvidenceDir, evidenceBundleFileName), bundle); err != nil {
+		return err
+	}
+	_, err := finalizeEvidenceReport(context.EvidenceDir, reportTerminalState{Lifecycle: "failed", Cleanup: failure.CleanupState, Confidentiality: "private"})
+	return err
 }
 
 func copyFallbackEvidenceFile(source string, destination string) error {

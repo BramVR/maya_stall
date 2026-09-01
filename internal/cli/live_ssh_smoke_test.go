@@ -409,13 +409,16 @@ func runKLVPushConsumingRepoSmoke(t *testing.T, options realSSHSmokeOptions) {
 	if publishCode != 0 {
 		t.Fatalf("evidence publish exit code = %d, want 0; stdout: %s stderr: %s", publishCode, publishStdout.String(), publishStderr.String())
 	}
-	for _, name := range []string{"artifact-manifest.json", "review-comment.md"} {
+	for _, name := range []string{"artifact-manifest.json", "review-comment.md", evidenceReportFileName} {
 		if _, err := os.Stat(filepath.Join(storeDir, bundle.RunID, name)); err != nil {
 			t.Fatalf("published Evidence Store missing %s: %v", name, err)
 		}
 	}
 	if !strings.Contains(publishStdout.String(), "url: https://evidence.example.invalid/maya-stall/") {
 		t.Fatalf("evidence publish did not print review-ready URL:\n%s", publishStdout.String())
+	}
+	if !strings.Contains(publishStdout.String(), "/"+evidenceReportFileName) {
+		t.Fatalf("evidence publish did not make the static report primary:\n%s", publishStdout.String())
 	}
 }
 
@@ -612,13 +615,9 @@ func smokeOutputValue(output string, key string) string {
 
 func assertLiveSmokeEvidenceBundle(t *testing.T, evidenceDir string) evidenceBundle {
 	t.Helper()
-	content, err := os.ReadFile(filepath.Join(evidenceDir, "evidence.json"))
+	bundle, err := readEvidenceBundleFile(evidenceDir)
 	if err != nil {
 		t.Fatalf("read Evidence Bundle: %v", err)
-	}
-	var bundle evidenceBundle
-	if err := json.Unmarshal(content, &bundle); err != nil {
-		t.Fatalf("parse Evidence Bundle: %v", err)
 	}
 	if bundle.Status != resultStatusPassed {
 		t.Fatalf("Evidence Bundle status = %q, want %q", bundle.Status, resultStatusPassed)
@@ -640,6 +639,7 @@ func assertLiveSmokeEvidenceBundle(t *testing.T, evidenceDir string) evidenceBun
 			t.Fatalf("Evidence Bundle missing %s: %v", relative, err)
 		}
 	}
+	assertLiveStaticEvidenceReport(t, evidenceDir, bundle)
 	for _, artifact := range bundle.VisualEvidence {
 		if artifact.Kind == "" || artifact.Path == "" || artifact.MediaType == "" {
 			t.Fatalf("Visual Evidence artifact incomplete: %+v", artifact)
@@ -682,6 +682,37 @@ func assertLiveSmokeEvidenceBundle(t *testing.T, evidenceDir string) evidenceBun
 		t.Fatalf("Visual Evidence provenance events: %v", err)
 	}
 	return bundle
+}
+
+func assertLiveStaticEvidenceReport(t *testing.T, evidenceDir string, bundle evidenceBundle) {
+	t.Helper()
+	if bundle.Report == nil || bundle.Report.Path != evidenceReportFileName || bundle.Report.MediaType != reportMediaType {
+		t.Fatalf("Evidence Bundle report metadata = %+v", bundle.Report)
+	}
+	reportBytes, err := os.ReadFile(filepath.Join(evidenceDir, evidenceReportFileName))
+	if err != nil {
+		t.Fatalf("read static Evidence Report: %v", err)
+	}
+	if bundle.Report.Size != int64(len(reportBytes)) || bundle.Report.SHA256 != sha256HexOfBytes(reportBytes) {
+		t.Fatalf("Evidence Report integrity = %+v, bytes = %d", bundle.Report, len(reportBytes))
+	}
+	var manifest runManifest
+	manifestBytes, err := os.ReadFile(filepath.Join(evidenceDir, bundle.Manifest))
+	if err != nil || json.Unmarshal(manifestBytes, &manifest) != nil || manifest.Report == nil || *manifest.Report != *bundle.Report {
+		t.Fatalf("manifest Evidence Report metadata does not match bundle: manifest=%+v bundle=%+v err=%v", manifest.Report, bundle.Report, err)
+	}
+	output := filepath.Join(t.TempDir(), evidenceReportFileName)
+	view, _, err := renderExistingEvidenceReport("", evidenceReportOptions{BundleDir: evidenceDir, Output: output})
+	if err != nil {
+		t.Fatalf("render real Evidence Bundle report: %v", err)
+	}
+	rendered, err := os.ReadFile(output)
+	if err != nil || !bytes.Equal(rendered, reportBytes) {
+		t.Fatalf("real Evidence Bundle report was not deterministic: err=%v", err)
+	}
+	if view.Verdict != "passed" || view.Lifecycle != "completed" || view.Cleanup != "completed" {
+		t.Fatalf("real Evidence Report terminal truth = %+v", view)
+	}
 }
 
 func assertLiveFreshRunSessionStopped(t *testing.T, host mayaHostConfig, session *brokerSessionIdentity) {

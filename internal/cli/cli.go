@@ -277,7 +277,7 @@ func RunWithRuntime(args []string, stdout io.Writer, stderr io.Writer, workDir s
 		return 0
 	case "evidence":
 		if len(args) < 2 {
-			fmt.Fprintf(stderr, "maya-stall evidence: expected collect or publish\n")
+			_, _ = fmt.Fprintln(stderr, "maya-stall evidence: expected collect, publish, or report")
 			return 2
 		}
 		switch args[1] {
@@ -353,8 +353,21 @@ func RunWithRuntime(args []string, stdout io.Writer, stderr io.Writer, workDir s
 			fmt.Fprintf(stdout, "reviewComment: %s\n", published.MarkdownPath)
 			fmt.Fprintf(stdout, "url: %s\n", published.URL)
 			return 0
+		case "report":
+			options, err := parseEvidenceReportArgs(args[2:])
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "maya-stall evidence report: %v\n", err)
+				return 2
+			}
+			view, output, err := renderExistingEvidenceReport(workDir, options)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "maya-stall evidence report: %v\n", err)
+				return 1
+			}
+			_, _ = fmt.Fprintf(stdout, "run: %s\nverdict: %s\nreport: %s\n", view.RunID, view.Verdict, output)
+			return 0
 		default:
-			fmt.Fprintf(stderr, "maya-stall evidence: expected collect or publish\n")
+			_, _ = fmt.Fprintln(stderr, "maya-stall evidence: expected collect, publish, or report")
 			return 2
 		}
 	case "review-comment":
@@ -443,6 +456,7 @@ func RunWithRuntime(args []string, stdout io.Writer, stderr io.Writer, workDir s
 }
 
 func printRunOutcome(stdout io.Writer, outcome runOutcome) {
+	view := reportViewForOutcome(outcome)
 	fmt.Fprintf(stdout, "run: %s\n", outcome.RunID)
 	if outcome.Accepted || outcome.Failure != nil {
 		_, _ = fmt.Fprintf(stdout, "accepted: %t\n", outcome.Accepted)
@@ -451,6 +465,10 @@ func printRunOutcome(stdout io.Writer, outcome runOutcome) {
 	fmt.Fprintf(stdout, "targetProfile: %s\n", outcome.TargetProfile)
 	fmt.Fprintf(stdout, "host: %s\n", outcome.Host)
 	fmt.Fprintf(stdout, "status: %s\n", outcome.Result.Status)
+	_, _ = fmt.Fprintf(stdout, "verdict: %s\n", view.Verdict)
+	_, _ = fmt.Fprintf(stdout, "assertions: %d\n", view.Counts.Assertions)
+	_, _ = fmt.Fprintf(stdout, "validators: %d\n", view.Counts.Validators)
+	_, _ = fmt.Fprintf(stdout, "artifacts: %d\n", view.Counts.Artifacts)
 	fmt.Fprintf(stdout, "stopPolicy: %s\n", outcome.StopPolicy)
 	fmt.Fprintf(stdout, "state: %s\n", outcome.StateDir)
 	fmt.Fprintf(stdout, "evidence: %s\n", outcome.EvidenceDir)
@@ -498,23 +516,24 @@ func withRunAcceptanceOutput(runtime runRuntime, stdout io.Writer, asJSON bool) 
 }
 
 type runCommandJSON struct {
-	Version          int      `json:"version"`
-	Kind             string   `json:"kind"`
-	Accepted         bool     `json:"accepted"`
-	RunID            string   `json:"runId,omitempty"`
-	Scenario         string   `json:"scenario,omitempty"`
-	TargetProfile    string   `json:"targetProfile,omitempty"`
-	Host             string   `json:"host,omitempty"`
-	Status           string   `json:"status,omitempty"`
-	StateDir         string   `json:"stateDir,omitempty"`
-	EvidenceDir      string   `json:"evidenceDir,omitempty"`
-	FailedLayer      string   `json:"failedLayer,omitempty"`
-	Diagnostic       string   `json:"diagnostic,omitempty"`
-	RemediationHint  string   `json:"remediationHint,omitempty"`
-	StopPolicy       string   `json:"stopPolicy,omitempty"`
-	FollowUpCommands []string `json:"followUpCommands,omitempty"`
-	Error            string   `json:"error,omitempty"`
-	Warnings         []string `json:"warnings,omitempty"`
+	Version          int         `json:"version"`
+	Kind             string      `json:"kind"`
+	Accepted         bool        `json:"accepted"`
+	RunID            string      `json:"runId,omitempty"`
+	Scenario         string      `json:"scenario,omitempty"`
+	TargetProfile    string      `json:"targetProfile,omitempty"`
+	Host             string      `json:"host,omitempty"`
+	Status           string      `json:"status,omitempty"`
+	StateDir         string      `json:"stateDir,omitempty"`
+	EvidenceDir      string      `json:"evidenceDir,omitempty"`
+	FailedLayer      string      `json:"failedLayer,omitempty"`
+	Diagnostic       string      `json:"diagnostic,omitempty"`
+	RemediationHint  string      `json:"remediationHint,omitempty"`
+	StopPolicy       string      `json:"stopPolicy,omitempty"`
+	FollowUpCommands []string    `json:"followUpCommands,omitempty"`
+	Error            string      `json:"error,omitempty"`
+	Warnings         []string    `json:"warnings,omitempty"`
+	Report           *reportView `json:"report,omitempty"`
 }
 
 func printRunCommandOutcome(stdout io.Writer, outcome runOutcome, asJSON bool) {
@@ -536,6 +555,7 @@ func printRunCommandOutcome(stdout io.Writer, outcome runOutcome, asJSON bool) {
 		StopPolicy:       outcome.StopPolicy,
 		FollowUpCommands: outcome.FollowUpCommands,
 		Warnings:         outcome.Warnings,
+		Report:           reportViewPointer(outcome),
 	}
 	if outcome.Failure != nil {
 		result.FailedLayer = outcome.Failure.FailedLayer
@@ -598,6 +618,7 @@ Usage:
   maya-stall control click --x <pixels> --y <pixels> [--host-config <path>] [--target-profile <name>] [--host <id>] [--dry-run]
   maya-stall evidence collect [--json] [--control-plane <https-url>] [--control-plane-token-env <name>] [--host-config <path>] [--target-profile <name>] [--host <id>] <scenario>
   maya-stall evidence publish --destination <path> --base-url <url> <evidence-bundle-dir>
+  maya-stall evidence report --output <path> <evidence-bundle-dir>
   maya-stall review-comment github --repo <owner/name> --pr <number> [--token-env <name>] [--api-url <url>] [--dry-run] <published-evidence-dir>
   maya-stall review-comment gitlab --project <path-or-id> --merge-request <iid> [--token-env <name>] [--base-url <url>] [--dry-run] <published-evidence-dir>
   maya-stall attach <run-id> [--control-plane <https-url>] [--control-plane-token-env <name>] [--from-sequence <number>]
@@ -613,6 +634,7 @@ Commands:
   doctor   check local config, Target Profile, and Host Health layers
   evidence collect   run a Scenario and write a complete Evidence Bundle
   evidence publish   copy an Evidence Bundle to a filesystem Evidence Store
+  evidence report   render deterministic HTML from an existing Evidence Bundle
   events    read ordered durable events for one run
   init      write a repo-only sample .maya-stall.yaml
   logs      read bounded retained logs for one run

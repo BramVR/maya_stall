@@ -366,7 +366,47 @@ func stopRun(repoDir string, runID string, now func() time.Time) error {
 	}
 	stopErr := stopKeptRun(repoDir, runID, now())
 	ledgerErr := updateRunLedgerAfterStop(repoDir, runID, stopErr, now())
-	return errors.Join(stopErr, ledgerErr)
+	reportErr := finalizeStoppedRunEvidenceReport(repoDir, runID, stopErr, ledgerErr)
+	return errors.Join(stopErr, ledgerErr, reportErr)
+}
+
+func finalizeStoppedRunEvidenceReport(repoDir string, runID string, stopErr error, ledgerErr error) error {
+	bundleDir := filepath.Join(repoDir, "artifacts", "maya-stall", runID)
+	if _, err := os.Stat(filepath.Join(bundleDir, evidenceBundleFileName)); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	terminal := reportTerminalState{Cleanup: "completed", Confidentiality: "private", Next: "maya-stall result " + runID}
+	var mutate func(*evidenceBundle)
+	if stopErr != nil {
+		terminal.Lifecycle, terminal.Cleanup = "cleanup-failed", "failed"
+	} else if bundle, err := readEvidenceBundleFile(bundleDir); err != nil {
+		return errors.Join(err, invalidateEvidenceReport(bundleDir))
+	} else if bundle.Status == resultStatusPassed {
+		terminal.Lifecycle = "completed"
+	} else {
+		terminal.Lifecycle = "failed"
+	}
+	terminalErr := errors.Join(stopErr, ledgerErr)
+	if terminalErr != nil {
+		if stopErr == nil {
+			terminal.Lifecycle = "failed"
+		}
+		mutate = func(bundle *evidenceBundle) {
+			bundle.Status = resultStatusFailed
+			bundle.Failure = &runFailureEvidence{
+				FailedLayer: string(failureLayerRunState), Diagnostic: terminalErr.Error(),
+				RemediationHint: "Resolve the reported cleanup or run-ledger failure, then retry the stop command.",
+				CaptureState:    "completed", CleanupState: terminal.Cleanup,
+			}
+		}
+	}
+	_, err := finalizeEvidenceReportWithBundleMutation(bundleDir, terminal, mutate)
+	if err != nil {
+		return errors.Join(err, invalidateEvidenceReport(bundleDir))
+	}
+	return nil
 }
 
 func stopKeptRun(repoDir string, runID string, now time.Time) error {

@@ -27,6 +27,7 @@ type evidenceArtifact struct {
 	Kind      string `json:"kind"`
 	Path      string `json:"path"`
 	MediaType string `json:"mediaType,omitempty"`
+	Size      int64  `json:"size,omitempty"`
 	Origin    string `json:"origin,omitempty"`
 	SHA256    string `json:"sha256,omitempty"`
 }
@@ -46,6 +47,9 @@ func buildEvidenceBundleCatalog(bundle evidenceBundle) []evidenceArtifact {
 	add(evidenceArtifact{Label: "metadata", Kind: "metadata", Path: evidenceBundleFileName, MediaType: "application/json"})
 	add(evidenceArtifact{Label: "metadata", Kind: "metadata", Path: bundle.Manifest, MediaType: "application/json"})
 	add(evidenceArtifact{Label: "metadata", Kind: "metadata", Path: bundle.ScenarioResult, MediaType: "application/json"})
+	if bundle.Report != nil {
+		add(*bundle.Report)
+	}
 	add(evidenceArtifact{Label: "logs", Kind: "events", Path: bundle.Events, MediaType: "application/x-ndjson"})
 	add(evidenceArtifact{Label: "logs", Kind: "log", Path: bundle.Log, MediaType: "text/plain"})
 	for _, artifact := range bundle.VisualEvidence {
@@ -65,10 +69,13 @@ func buildEvidenceBundleCatalog(bundle evidenceBundle) []evidenceArtifact {
 }
 
 func evidenceBundleCatalog(bundle evidenceBundle) []evidenceArtifact {
-	if len(bundle.Artifacts) == 0 {
-		return buildEvidenceBundleCatalog(bundle)
+	var artifacts []evidenceArtifact
+	if bundle.Report != nil {
+		artifacts = append(artifacts, *bundle.Report)
 	}
-	return sortEvidenceArtifactCatalog(dedupeEvidenceArtifactCatalog(bundle.Artifacts))
+	artifacts = append(artifacts, bundle.Artifacts...)
+	artifacts = append(artifacts, buildEvidenceBundleCatalog(bundle)...)
+	return sortEvidenceArtifactCatalog(dedupeEvidenceArtifactCatalog(artifacts))
 }
 
 func dedupeEvidenceArtifactCatalog(artifacts []evidenceArtifact) []evidenceArtifact {
@@ -113,6 +120,7 @@ func isReservedEvidenceArtifactPath(path string) bool {
 		evidenceManifestFileName,
 		evidenceEventsFileName,
 		evidenceScenarioResultFileName,
+		evidenceReportFileName,
 		evidencePublishedManifestName,
 		evidenceReviewCommentName,
 		"logs",

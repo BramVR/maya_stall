@@ -2010,6 +2010,7 @@ func runCommandJSONForOutcome(outcome runOutcome) runCommandJSON {
 		Scenario: outcome.Scenario, TargetProfile: outcome.TargetProfile, Host: outcome.Host,
 		Status: outcome.Result.Status, StopPolicy: outcome.StopPolicy,
 		Warnings: outcome.Warnings,
+		Report:   reportViewPointer(outcome),
 	}
 	if outcome.Failure != nil {
 		result.FailedLayer = outcome.Failure.FailedLayer
@@ -2025,6 +2026,7 @@ func runOutcomeFromCommandJSON(result runCommandJSON) runOutcome {
 		StateDir: result.StateDir, EvidenceDir: result.EvidenceDir, Result: ScenarioResult{Status: result.Status},
 		StopPolicy: result.StopPolicy, FollowUpCommands: result.FollowUpCommands, Accepted: result.Accepted,
 		Warnings: result.Warnings,
+		Report:   result.Report,
 	}
 	if result.FailedLayer != "" {
 		outcome.Failure = &runFailureEvidence{FailedLayer: result.FailedLayer, Diagnostic: result.Diagnostic, RemediationHint: result.RemediationHint}

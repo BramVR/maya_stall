@@ -42,4 +42,6 @@ maya-stall review-comment github \
 ```
 
 The command rewrites `review-comment.md` from `artifact-manifest.json` before
-posting so the comment matches the published bundle.
+posting so the comment matches the published bundle. When the bundle includes a
+verified `report.html`, the comment links it as the primary detail page before
+the artifact inventory.

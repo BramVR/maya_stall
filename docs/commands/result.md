@@ -15,3 +15,8 @@ when the Scenario passed, evidence is readable, lifecycle state is `completed`,
 and cleanup completed. Kept and cleanup-failed runs are never successful.
 While execution or evidence finalization is still active, the same contract
 returns `final: false`, `success: false`, and `cleanupState: pending`.
+
+Terminal `run --json` and `evidence collect --json` records also include a
+versioned `report` projection. It is the typed source for the stored HTML
+report's verdict, counts, failure category, lifecycle, cleanup, missing evidence,
+and next command; consumers do not need to scrape terminal or HTML text.

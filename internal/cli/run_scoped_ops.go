@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -430,12 +431,23 @@ func appendRunScopedVisualEvidence(repoDir string, runID string, artifact visual
 		if existing.Path == artifact.Path && existing.Kind == artifact.Kind {
 			bundle.VisualEvidence[index] = artifact
 			bundle.Artifacts = buildEvidenceBundleCatalog(bundle)
-			return writeJSONFile(path, bundle)
+			return writeRunScopedEvidenceAndReport(path, bundle)
 		}
 	}
 	bundle.VisualEvidence = append(bundle.VisualEvidence, artifact)
 	bundle.Artifacts = buildEvidenceBundleCatalog(bundle)
-	return writeJSONFile(path, bundle)
+	return writeRunScopedEvidenceAndReport(path, bundle)
+}
+
+func writeRunScopedEvidenceAndReport(path string, bundle evidenceBundle) error {
+	bundleDir := filepath.Dir(path)
+	_, err := finalizeEvidenceReportWithBundleMutation(bundleDir, reportTerminalState{}, func(current *evidenceBundle) {
+		*current = bundle
+	})
+	if err != nil {
+		return errors.Join(err, invalidateEvidenceReport(bundleDir))
+	}
+	return nil
 }
 
 func appendRunScopedEvidenceEvents(statePath string, evidencePath string) error {
