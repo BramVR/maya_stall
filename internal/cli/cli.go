@@ -364,10 +364,10 @@ func RunWithRuntime(args []string, stdout io.Writer, stderr io.Writer, workDir s
 				_, _ = fmt.Fprintf(stderr, "maya-stall evidence report: %v\n", err)
 				return 1
 			}
-			fmt.Fprintf(stdout, "run: %s\nverdict: %s\nreport: %s\n", view.RunID, view.Verdict, output)
+			_, _ = fmt.Fprintf(stdout, "run: %s\nverdict: %s\nreport: %s\n", view.RunID, view.Verdict, output)
 			return 0
 		default:
-			fmt.Fprintf(stderr, "maya-stall evidence: expected collect, publish, or report\n")
+			_, _ = fmt.Fprintln(stderr, "maya-stall evidence: expected collect, publish, or report")
 			return 2
 		}
 	case "review-comment":
@@ -465,10 +465,10 @@ func printRunOutcome(stdout io.Writer, outcome runOutcome) {
 	fmt.Fprintf(stdout, "targetProfile: %s\n", outcome.TargetProfile)
 	fmt.Fprintf(stdout, "host: %s\n", outcome.Host)
 	fmt.Fprintf(stdout, "status: %s\n", outcome.Result.Status)
-	fmt.Fprintf(stdout, "verdict: %s\n", view.Verdict)
-	fmt.Fprintf(stdout, "assertions: %d\n", view.Counts.Assertions)
-	fmt.Fprintf(stdout, "validators: %d\n", view.Counts.Validators)
-	fmt.Fprintf(stdout, "artifacts: %d\n", view.Counts.Artifacts)
+	_, _ = fmt.Fprintf(stdout, "verdict: %s\n", view.Verdict)
+	_, _ = fmt.Fprintf(stdout, "assertions: %d\n", view.Counts.Assertions)
+	_, _ = fmt.Fprintf(stdout, "validators: %d\n", view.Counts.Validators)
+	_, _ = fmt.Fprintf(stdout, "artifacts: %d\n", view.Counts.Artifacts)
 	fmt.Fprintf(stdout, "stopPolicy: %s\n", outcome.StopPolicy)
 	fmt.Fprintf(stdout, "state: %s\n", outcome.StateDir)
 	fmt.Fprintf(stdout, "evidence: %s\n", outcome.EvidenceDir)
