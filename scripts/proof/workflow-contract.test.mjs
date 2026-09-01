@@ -58,7 +58,7 @@ test("one same-repository live job is serialized behind verified hosted gates", 
   assert.equal((required.match(/name: (?:Guard|Recheck) current PR or main head/g) ?? []).length, 2);
 });
 
-test("all nine live smokes run serially in one bounded Go test process", () => {
+test("all eleven live smokes run serially in one bounded Go test process", () => {
   assert.equal((required.match(/go test -json \.\/internal\/cli -run/g) ?? []).length, 1);
   assert.match(required, /-parallel=1 -timeout=45m/);
   assert.match(required, /live_maya:[\s\S]*?timeout-minutes: 55/);
@@ -74,6 +74,8 @@ test("all nine live smokes run serially in one bounded Go test process", () => {
     "TestOptInRealHostLockContentionAndRecoverySmoke",
     "TestOptInRealRunScopedDesktopOpsSmoke",
     "TestOptInRealLocalSessiondRuntimeInputSmoke",
+    "TestOptInRealSSHTransportSurvivesLeaseRenewalAndSFTPCollection",
+    "TestOptInRealSSHTransportMayaAcceptance",
   ]) assert.match(required, new RegExp(name));
 });
 
