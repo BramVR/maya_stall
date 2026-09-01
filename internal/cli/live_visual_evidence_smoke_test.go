@@ -613,6 +613,8 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 		"WorkingArea",
 		"windowHandle",
 		"Add_Click",
+		"Publish-Json",
+		"[System.IO.File]::Move",
 	} {
 		if !strings.Contains(launch, want) {
 			t.Fatalf("modal fixture launch missing %q:\n%s", want, launch)
@@ -627,7 +629,7 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 	}
 
 	target := liveDesktopControlModalTargetPowerShell(fixture)
-	for _, want := range []string{"SetWindowPos", "GetWindowRect", "WindowFromPoint", "KeepTargetable", "$expectedPID = 42", "$expectedWindow = [IntPtr]84", "$expectedButton = [IntPtr]126", "targetWindow", "desktop-control-modal.closed", "desktop-control-modal.guard-stop", "while ($true)", `$status = "closed"`, "$keepTargetTask = $true", "/IT", "LIMITED", `status = "error"`, "$outcome | ConvertTo-Json -Compress"} {
+	for _, want := range []string{"SetWindowPos", "GetWindowRect", "WindowFromPoint", "KeepTargetable", "$expectedPID = 42", "$expectedWindow = [IntPtr]84", "$expectedButton = [IntPtr]126", "targetWindow", "desktop-control-modal.closed", "desktop-control-modal.target-ready.json", "desktop-control-modal.target-outcome.json", "desktop-control-modal.target-ack", "desktop-control-modal.guard-stop", "Publish-Json", "while ($true)", `$status = "closed"`, "$keepTargetTask = $true", "/IT", "LIMITED", `status = "error"`, "$outcomeValue | ConvertTo-Json -Compress"} {
 		if !strings.Contains(target, want) {
 			t.Fatalf("modal fixture target preparation missing %q:\n%s", want, target)
 		}
@@ -638,8 +640,14 @@ func TestLiveDesktopControlModalFixtureUsesInteractiveTask(t *testing.T) {
 	if strings.Contains(target, "for ($i = 0; $i -lt 300; $i++)") {
 		t.Fatalf("modal fixture target guard must wait for the explicit closed or cleanup handshake:\n%s", target)
 	}
+	readyPublish := strings.Index(target, `Publish-Json "__MAYA_STALL_MODAL_TARGET_READY__"`)
+	guardAck := strings.Index(target, `while (-not (Test-Path -LiteralPath "__MAYA_STALL_MODAL_TARGET_ACK__"))`)
+	guardCheck := strings.Index(target, "[MayaStallModalTarget]::KeepTargetable")
+	if readyPublish < 0 || guardAck <= readyPublish || guardCheck <= guardAck {
+		t.Fatalf("modal fixture target guard must atomically publish readiness, wait for acknowledgement, then guard the target:\n%s", target)
+	}
 	closed := liveDesktopControlModalClosedPowerShell(fixture)
-	for _, want := range []string{"desktop-control-modal.target.json", `$outcome.status -eq "error"`, "desktop control modal target guard failed"} {
+	for _, want := range []string{"desktop-control-modal.target-outcome.json", `$outcome.status -eq "error"`, "desktop control modal target guard failed"} {
 		if !strings.Contains(closed, want) {
 			t.Fatalf("modal fixture close wait missing %q:\n%s", want, closed)
 		}
@@ -1124,6 +1132,11 @@ $pidPath = Join-Path $root "desktop-control-modal.pid"
 $script = Join-Path $root "desktop-control-modal.ps1"
 $template = @'
 $ErrorActionPreference = "Stop"
+function Publish-Json([string]$Path, [object]$Value) {
+  $temporary = $Path + "." + [Guid]::NewGuid().ToString("N") + ".tmp"
+  [System.IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Compress), [System.Text.Encoding]::ASCII)
+  [System.IO.File]::Move($temporary, $Path)
+}
 Set-Content -LiteralPath "__MAYA_STALL_MODAL_PID__" -Value $PID
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1168,7 +1181,7 @@ $form.Add_Shown({
   $form.Activate()
   $form.BringToFront()
   $button.Focus() | Out-Null
-  [pscustomobject]@{ status = "shown"; clickX = $center.X; clickY = $center.Y; pid = $PID; windowHandle = [int64]$form.Handle; buttonHandle = [int64]$button.Handle } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_SHOWN__"
+  Publish-Json "__MAYA_STALL_MODAL_SHOWN__" ([pscustomobject]@{ status = "shown"; clickX = $center.X; clickY = $center.Y; pid = $PID; windowHandle = [int64]$form.Handle; buttonHandle = [int64]$button.Handle })
 })
 [void]$form.ShowDialog()
 '@
@@ -1200,12 +1213,19 @@ func liveDesktopControlModalTargetPowerShell(fixture liveDesktopControlModalFixt
 $ProgressPreference = "SilentlyContinue"
 $root = %s
 $taskName = %s
-$result = Join-Path $root "desktop-control-modal.target.json"
+$readyPath = Join-Path $root "desktop-control-modal.target-ready.json"
+$outcomePath = Join-Path $root "desktop-control-modal.target-outcome.json"
+$ackPath = Join-Path $root "desktop-control-modal.target-ack"
 $closed = Join-Path $root "desktop-control-modal.closed"
 $stop = Join-Path $root "desktop-control-modal.guard-stop"
 $script = Join-Path $root "desktop-control-modal-target.ps1"
 $template = @'
 $ErrorActionPreference = "Stop"
+function Publish-Json([string]$Path, [object]$Value) {
+  $temporary = $Path + "." + [Guid]::NewGuid().ToString("N") + ".tmp"
+  [System.IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Compress), [System.Text.Encoding]::ASCII)
+  [System.IO.File]::Move($temporary, $Path)
+}
 try {
   $expectedPID = %d
   $expectedWindow = [IntPtr]%d
@@ -1254,11 +1274,16 @@ public static class MayaStallModalTarget {
   $targetWindow = [int64]0
   $targetPID = [MayaStallModalTarget]::ActivateAndVerify($expectedWindow, $expectedButton, [ref]$clickX, [ref]$clickY, [ref]$targetWindow)
   if ($targetPID -ne $expectedPID -or $targetWindow -ne $expectedButton.ToInt64()) { throw "desktop click target PID $targetPID/window $targetWindow does not match owned modal expected PID $expectedPID/button $($expectedButton.ToInt64()) at ($clickX,$clickY) and expected window handle $($expectedWindow.ToInt64())" }
-  [pscustomobject]@{ status = "ready"; targetPID = $targetPID; targetWindow = $targetWindow; clickX = $clickX; clickY = $clickY } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_TARGET_RESULT__"
+  Publish-Json "__MAYA_STALL_MODAL_TARGET_READY__" ([pscustomobject]@{ status = "ready"; targetPID = $targetPID; targetWindow = $targetWindow; clickX = $clickX; clickY = $clickY })
+  while (-not (Test-Path -LiteralPath "__MAYA_STALL_MODAL_TARGET_ACK__")) {
+    if (Test-Path -LiteralPath "__MAYA_STALL_MODAL_CLOSED__") { exit 0 }
+    if (Test-Path -LiteralPath "__MAYA_STALL_MODAL_GUARD_STOP__") { exit 0 }
+    Start-Sleep -Milliseconds 50
+  }
   while ($true) {
     if (Test-Path -LiteralPath "__MAYA_STALL_MODAL_CLOSED__") {
       $status = "closed"
-      [pscustomobject]@{ status = $status } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_TARGET_RESULT__"
+      Publish-Json "__MAYA_STALL_MODAL_TARGET_OUTCOME__" ([pscustomobject]@{ status = $status })
       exit 0
     }
     if (Test-Path -LiteralPath "__MAYA_STALL_MODAL_GUARD_STOP__") { exit 0 }
@@ -1266,16 +1291,16 @@ public static class MayaStallModalTarget {
     Start-Sleep -Milliseconds 50
   }
 } catch {
-  [pscustomobject]@{ status = "error"; detail = $_.Exception.Message } | ConvertTo-Json -Compress | Set-Content -Encoding ASCII -LiteralPath "__MAYA_STALL_MODAL_TARGET_RESULT__"
+  Publish-Json "__MAYA_STALL_MODAL_TARGET_OUTCOME__" ([pscustomobject]@{ status = "error"; detail = $_.Exception.Message })
   exit 1
 }
 '@
-$template.Replace("__MAYA_STALL_MODAL_TARGET_RESULT__", $result.Replace("\", "\\")).Replace("__MAYA_STALL_MODAL_CLOSED__", $closed.Replace("\", "\\")).Replace("__MAYA_STALL_MODAL_GUARD_STOP__", $stop.Replace("\", "\\")) | Set-Content -Encoding ASCII -LiteralPath $script
+$template.Replace("__MAYA_STALL_MODAL_TARGET_READY__", $readyPath.Replace("\", "\\")).Replace("__MAYA_STALL_MODAL_TARGET_OUTCOME__", $outcomePath.Replace("\", "\\")).Replace("__MAYA_STALL_MODAL_TARGET_ACK__", $ackPath.Replace("\", "\\")).Replace("__MAYA_STALL_MODAL_CLOSED__", $closed.Replace("\", "\\")).Replace("__MAYA_STALL_MODAL_GUARD_STOP__", $stop.Replace("\", "\\")) | Set-Content -Encoding ASCII -LiteralPath $script
 cmd.exe /c "schtasks.exe /Delete /TN $taskName /F 2>NUL" | Out-Null
 $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
 $taskRun = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
 $createArgs = @("/Create", "/TN", $taskName, "/SC", "ONCE", "/ST", $startTime, "/TR", $taskRun, "/RL", "LIMITED", "/IT", "/F")
-$outcome = $null
+$outcomeValue = $null
 $keepTargetTask = $false
 try {
   & schtasks.exe @createArgs | Out-Null
@@ -1283,24 +1308,31 @@ try {
   schtasks.exe /Run /TN $taskName | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "failed to run interactive owned-modal target task with schtasks.exe /Run" }
   for ($i = 0; $i -lt 40; $i++) {
-    if (Test-Path -LiteralPath $result) {
-      $outcome = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+    if (Test-Path -LiteralPath $outcomePath) {
+      $outcomeValue = Get-Content -LiteralPath $outcomePath -Raw | ConvertFrom-Json
+      break
+    }
+    if (Test-Path -LiteralPath $readyPath) {
+      $outcomeValue = Get-Content -LiteralPath $readyPath -Raw | ConvertFrom-Json
       break
     }
     Start-Sleep -Milliseconds 250
   }
-  if ($null -eq $outcome) { throw "scheduled interactive owned-modal target check did not complete" }
-  if ($outcome.status -eq "ready") { $keepTargetTask = $true }
+  if ($null -eq $outcomeValue) { throw "scheduled interactive owned-modal target check did not complete" }
+  if ($outcomeValue.status -eq "ready") {
+    Set-Content -LiteralPath $ackPath -Value "acknowledged"
+    $keepTargetTask = $true
+  }
 } catch {
-  $outcome = [pscustomobject]@{ status = "error"; detail = $_.Exception.Message; targetPID = 0 }
+  $outcomeValue = [pscustomobject]@{ status = "error"; detail = $_.Exception.Message; targetPID = 0 }
 } finally {
   if (-not $keepTargetTask) {
     schtasks.exe /Delete /TN $taskName /F 2>$null | Out-Null
     Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
   }
-  Remove-Item -LiteralPath $result -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $readyPath -Force -ErrorAction SilentlyContinue
 }
-$outcome | ConvertTo-Json -Compress`,
+$outcomeValue | ConvertTo-Json -Compress`,
 		powerShellSingleQuoted(fixture.RemoteRoot),
 		powerShellSingleQuoted(fixture.TaskName+"-Target"),
 		fixture.ProcessID,
@@ -1313,15 +1345,15 @@ func liveDesktopControlModalClosedPowerShell(fixture liveDesktopControlModalFixt
 	return fmt.Sprintf(`$ErrorActionPreference = "Stop"
 $root = %s
 $closed = Join-Path $root "desktop-control-modal.closed"
-$targetResult = Join-Path $root "desktop-control-modal.target.json"
+$targetOutcome = Join-Path $root "desktop-control-modal.target-outcome.json"
 for ($i = 0; $i -lt %d; $i++) {
+  if (Test-Path -LiteralPath $targetOutcome) {
+    $outcome = Get-Content -LiteralPath $targetOutcome -Raw | ConvertFrom-Json
+    if ($null -ne $outcome -and $outcome.status -eq "error") { throw "desktop control modal target guard failed: $($outcome.detail)" }
+  }
   if (Test-Path -LiteralPath $closed) {
     Write-Output "closed"
     exit 0
-  }
-  if (Test-Path -LiteralPath $targetResult) {
-    try { $outcome = Get-Content -LiteralPath $targetResult -Raw | ConvertFrom-Json } catch { $outcome = $null }
-    if ($null -ne $outcome -and $outcome.status -eq "error") { throw "desktop control modal target guard failed: $($outcome.detail)" }
   }
   Start-Sleep -Milliseconds %d
 }
