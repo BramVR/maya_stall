@@ -997,6 +997,51 @@ exit 1
 	}
 }
 
+func TestHostLockClaimRefusesLeaseThatExpiresWhileWaitingForTheMutex(t *testing.T) {
+	lockDir := t.TempDir()
+	lease := hostSideLockLeaseDuration
+	hostSideLockLeaseDuration = 300 * time.Millisecond
+	lock := acquireTestHostSideLock(t, lockDir)
+	hostSideLockLeaseDuration = lease
+	expiresAt, err := time.Parse(time.RFC3339Nano, parseHostLockOwner(lock.expected).LeaseExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed := make(chan error, 1)
+	if err := withLocalHostSideMutex(lockDir, "host", func() error {
+		go func() { claimed <- lock.fence("host").claim() }()
+		time.Sleep(time.Until(expiresAt) + 50*time.Millisecond)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-claimed; !errors.Is(err, errHostLockOwnershipChanged) {
+		t.Fatalf("claim after the lease expired under the mutex = %v, want Host Lock ownership change", err)
+	}
+}
+
+func TestGGMayaSessiondRemoteFenceIgnoresMarkerTextInActionOutput(t *testing.T) {
+	dir := t.TempDir()
+	sshPath := filepath.Join(dir, "fake-ssh-marker-output")
+	output := `{"ok":true,"tool":"script.execute","result":"` + remoteHostLockFenceRefused + `"}`
+	if err := os.WriteFile(sshPath, []byte("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' "+shellQuote(output)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	broker := ggMayaSessiondBroker{
+		host: mayaHostConfig{
+			Transport: "ssh",
+			SSH:       sshConfig{Host: "maya-win-01", Binary: sshPath},
+			WorkRoot:  "C:/maya-stall",
+			Broker:    brokerConfig{Type: "gg-mayasessiond", StateDir: "C:/maya-stall/sessiond-ui", Python: "C:/python.exe", Repo: "C:/sessiond"},
+		},
+		fence: hostLockFence{hostScript: remoteHostLockFenceScript("C:/maya-stall/state/locks/host.lock", "token-a")},
+	}
+	result, err := broker.callTool("script.execute", nil, time.Minute)
+	if err != nil || !result.OK {
+		t.Fatalf("callTool = %+v, %v; want the action's successful result", result, err)
+	}
+}
+
 func acquireTestHostSideLock(t *testing.T, lockDir string) *hostSideLock {
 	t.Helper()
 	content, err := hostSideLockContent("host", "C:/maya-stall/sessiond-ui", "C:/maya-stall/sessiond-venv311/Scripts/python.exe", "C:/maya-stall/tools/GG_MayaSessiond", "")

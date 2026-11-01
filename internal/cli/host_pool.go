@@ -91,6 +91,9 @@ type hostSideLock struct {
 	expected     string
 	replaceOwner func(string, string) error
 	remove       func(string) error
+	// claimOwner is replaceOwner that also refuses an expired lease, checked
+	// under the same mutex. Set for locks whose mutex lives on this machine.
+	claimOwner func(string, string) error
 	// hostFenceScript is set for locks held on a remote Maya Host.
 	hostFenceScript string
 }
@@ -99,7 +102,7 @@ func (lock *hostSideLock) fence(hostID string) hostLockFence {
 	if lock.hostFenceScript != "" {
 		return hostLockFence{hostScript: lock.hostFenceScript}
 	}
-	if lock.expected == "" {
+	if lock.claimOwner == nil {
 		return hostLockFence{}
 	}
 	return hostLockFence{claim: func() error { return lock.claim(hostID) }}
@@ -110,14 +113,11 @@ func (lock *hostSideLock) claim(hostID string) error {
 	lock.mu.Lock()
 	defer lock.mu.Unlock()
 	owner := parseHostLockOwner(lock.expected)
-	if owner.KeptRun != "" {
-		return lock.replaceOwner(lock.expected, lock.expected)
+	content := lock.expected
+	if owner.KeptRun == "" {
+		content = hostSideLockOwnerContent(hostID, owner, owner.ActiveRun, "", true)
 	}
-	if isStaleHostSideOwner(owner) {
-		return fmt.Errorf("%w: lease expired", errHostLockOwnershipChanged)
-	}
-	content := hostSideLockOwnerContent(hostID, owner, owner.ActiveRun, "", true)
-	if err := lock.replaceOwner(lock.expected, content); err != nil {
+	if err := lock.claimOwner(lock.expected, content); err != nil {
 		return err
 	}
 	lock.expected = content
@@ -926,19 +926,28 @@ func acquireLocalHostSideLock(lockDir string, hostID string, content string, isS
 		return nil, locked, err
 	}
 	lockPath := filepath.Join(lockDir, hostID+".lock")
+	replace := func(expected string, replacement string, unexpired bool) error {
+		return withLocalHostSideMutex(lockDir, hostID, func() error {
+			current, err := os.ReadFile(lockPath)
+			if err != nil {
+				return err
+			}
+			if string(current) != expected {
+				return fmt.Errorf("%w for %s", errHostLockOwnershipChanged, hostID)
+			}
+			if unexpired && isStaleHostSideOwner(parseHostLockOwner(expected)) {
+				return fmt.Errorf("%w for %s: lease expired", errHostLockOwnershipChanged, hostID)
+			}
+			return replaceHostLockOwnerAtDir(lockDir, hostID, replacement)
+		})
+	}
 	return &hostSideLock{
 		expected: content,
 		replaceOwner: func(expected string, replacement string) error {
-			return withLocalHostSideMutex(lockDir, hostID, func() error {
-				current, err := os.ReadFile(lockPath)
-				if err != nil {
-					return err
-				}
-				if string(current) != expected {
-					return fmt.Errorf("%w for %s", errHostLockOwnershipChanged, hostID)
-				}
-				return replaceHostLockOwnerAtDir(lockDir, hostID, replacement)
-			})
+			return replace(expected, replacement, false)
+		},
+		claimOwner: func(expected string, replacement string) error {
+			return replace(expected, replacement, true)
 		},
 		remove: func(expected string) error {
 			return withLocalHostSideMutex(lockDir, hostID, func() error {

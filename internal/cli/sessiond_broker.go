@@ -861,10 +861,21 @@ func (broker ggMayaSessiondBroker) runHostPowerShell(script string, fenced bool,
 	// The fence preamble makes the script too long for a command line, so it
 	// goes over stdin like the Host Lock scripts.
 	raw, err := runSSHCommandOutputWithInput(broker.host, encodedPowerShellCommand(remoteHostLockStdinRunnerPS), broker.fence.hostScript+"\n"+script+"\n", timeout)
-	if bytes.Contains(raw, []byte(remoteHostLockFenceRefused)) {
+	if err != nil && hostLockFenceRefused(raw) {
 		return nil, fmt.Errorf("%w on Maya Host", errHostLockOwnershipChanged)
 	}
 	return raw, err
+}
+
+// hostLockFenceRefused matches the preamble's own refusal line, not the same
+// text inside action output.
+func hostLockFenceRefused(raw []byte) bool {
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == remoteHostLockFenceRefused {
+			return true
+		}
+	}
+	return false
 }
 
 // sessiondCommandTouchesMaya reports whether a gg_mayasessiond CLI command
