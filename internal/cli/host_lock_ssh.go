@@ -181,7 +181,7 @@ func sessiondStatusProvesInactive(status sessiondStatusResult) bool {
 func newRemoteHostSideLock(host mayaHostConfig, lockPath string, content string) *hostSideLock {
 	return &hostSideLock{
 		expected:        content,
-		hostFenceScript: remoteHostLockFenceScript(lockPath, parseHostLockOwner(content).LockToken),
+		hostFenceScript: remoteHostLockFenceScript(lockPath, "lockToken", parseHostLockOwner(content).LockToken),
 		replaceOwner: func(expected string, replacement string) error {
 			return replaceRemoteHostLockOwner(host, expected, replacement)
 		},
@@ -614,21 +614,24 @@ Out-Result $result`, powerShellSingleQuoted(lockPath), powerShellSingleQuoted(ru
 const remoteHostLockFenceRefused = "maya-stall-host-lock-fence: refused"
 
 // remoteHostLockFenceScript is the Host-side preamble of a fenced broker
-// action. Under the lock mutex it proves lockToken still owns the lock with an
-// unexpired lease, then renews the lease by touching LastWriteTimeUtc, the Host
+// action. Under the lock mutex it proves the lock field (lockToken for an
+// active run, keptRun for a Kept Session) still names the caller. A kept lock
+// has no lease to check or renew. An active lock must hold an unexpired lease,
+// which the preamble renews by touching LastWriteTimeUtc, the Host
 // clock anchor Locked-Result measures age from. Content stays unchanged, so
 // the controller's exact-content compare-and-swap stays valid, while any
 // reclaimer's observed leaseVersion goes stale. On refusal it prints a marker
 // and throws, so the action never runs.
-func remoteHostLockFenceScript(lockPath string, token string) string {
+func remoteHostLockFenceScript(lockPath string, field string, value string) string {
 	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
 $fenceLockPath = %s
-$fenceToken = %s
+$fenceField = %s
+$fenceValue = %s
 %s
 $fenceOwned = Invoke-WithLockMutex $fenceLockPath {
   if (!(Test-Path -LiteralPath $fenceLockPath)) { return $false }
   $fields = Locked-Result $fenceLockPath
-  if ($fields.lockToken -cne $fenceToken) { return $false }
+  if ([string]$fields[$fenceField] -cne $fenceValue) { return $false }
   if ($fields.state -eq 'kept') { return $true }
   if ($fields.leaseExpired) { return $false }
   [System.IO.File]::SetLastWriteTimeUtc($fenceLockPath, [DateTime]::UtcNow)
@@ -638,7 +641,7 @@ if ($fenceOwned -ne $true) {
   [Console]::Out.WriteLine(%s)
   [Console]::Out.Flush()
   throw 'Host Lock ownership changed on Maya Host'
-}`, powerShellSingleQuoted(lockPath), powerShellSingleQuoted(token), remoteHostLockCommonPS, powerShellSingleQuoted(remoteHostLockFenceRefused))
+}`, powerShellSingleQuoted(lockPath), powerShellSingleQuoted(field), powerShellSingleQuoted(value), remoteHostLockCommonPS, powerShellSingleQuoted(remoteHostLockFenceRefused))
 }
 
 func remoteHostLockStateScript(lockPath string) string {

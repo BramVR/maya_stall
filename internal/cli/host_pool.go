@@ -850,6 +850,27 @@ func verifyKeptHostSideLockForRun(host mayaHostConfig, runID string) error {
 	return nil
 }
 
+// keptHostLockFence fences a Kept Session broker action on the Host Lock still
+// naming runID as keptRun. The stopping process holds no lease to renew.
+func keptHostLockFence(host mayaHostConfig, runID string) hostLockFence {
+	if host.usesRealSSH() {
+		if lockDir, ok := fakeSSHHostSideLockDir(host); ok {
+			return hostLockFence{claim: func() error { return verifyHostSideLockForRunAtDir(lockDir, "host", runID, true, false) }}
+		}
+		lockPath, err := remoteHostLockPath(host)
+		if err != nil {
+			return hostLockFence{claim: func() error { return err }}
+		}
+		return hostLockFence{hostScript: remoteHostLockFenceScript(lockPath, "keptRun", runID)}
+	}
+	if lockDir, ok := fakeHostSideLockDir(host); ok {
+		return hostLockFence{claim: func() error {
+			return verifyHostSideLockForRunAtDir(lockDir, localHostSideLockID(host), runID, true, false)
+		}}
+	}
+	return hostLockFence{}
+}
+
 func verifyHostSideLockForRunAtDir(lockDir string, hostID string, runID string, requireKept bool, allowStaleActive bool) error {
 	return withLocalHostSideMutex(lockDir, hostID, func() error {
 		lockPath := filepath.Join(lockDir, hostID+".lock")

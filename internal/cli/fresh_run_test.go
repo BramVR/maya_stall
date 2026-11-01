@@ -983,14 +983,14 @@ exit 1
 			Repo:     "C:/maya-stall/tools/GG_MayaSessiond",
 		},
 	}}
-	fence := hostLockFence{hostScript: remoteHostLockFenceScript("C:/maya-stall/state/locks/host.lock", "token-a")}
+	fence := hostLockFence{hostScript: remoteHostLockFenceScript("C:/maya-stall/state/locks/host.lock", "lockToken", "token-a")}
 
 	err := broker.StopSession(runContext{EventsPath: filepath.Join(dir, "events.jsonl"), HostLock: fence}, brokerSessionIdentity{BrokerAdapter: "gg-mayasessiond", SessionID: "session-owned"})
 	if !errors.Is(err, errHostLockOwnershipChanged) {
 		t.Fatalf("StopSession error = %v, want Host Lock ownership change", err)
 	}
 	sent := readOptionalTestFile(t, stdinLog)
-	fenceAt := strings.Index(sent, "$fenceToken = 'token-a'")
+	fenceAt := strings.Index(sent, "$fenceValue = 'token-a'")
 	actionAt := strings.Index(sent, "gg_maya_sessiond.cli @('stop'")
 	if fenceAt < 0 || actionAt < fenceAt || !strings.Contains(sent, "Invoke-WithLockMutex $fenceLockPath") {
 		t.Fatalf("fenced stop script does not prove Host Lock ownership before stopping:\n%s", sent)
@@ -1034,11 +1034,74 @@ func TestGGMayaSessiondRemoteFenceIgnoresMarkerTextInActionOutput(t *testing.T) 
 			WorkRoot:  "C:/maya-stall",
 			Broker:    brokerConfig{Type: "gg-mayasessiond", StateDir: "C:/maya-stall/sessiond-ui", Python: "C:/python.exe", Repo: "C:/sessiond"},
 		},
-		fence: hostLockFence{hostScript: remoteHostLockFenceScript("C:/maya-stall/state/locks/host.lock", "token-a")},
+		fence: hostLockFence{hostScript: remoteHostLockFenceScript("C:/maya-stall/state/locks/host.lock", "lockToken", "token-a")},
 	}
 	result, err := broker.callTool("script.execute", nil, time.Minute)
 	if err != nil || !result.OK {
 		t.Fatalf("callTool = %+v, %v; want the action's successful result", result, err)
+	}
+}
+
+func TestGGMayaSessiondKeptStopRefusedAfterKeptLockChangesHands(t *testing.T) {
+	dir := t.TempDir()
+	hostLog := filepath.Join(dir, "host.log")
+	sessionPath := filepath.Join(dir, "session")
+	sshPath := filepath.Join(dir, "fake-ssh-kept-stop")
+	// Status reports kept run A's session; run B then owns the Host and its
+	// session before A's stop lands.
+	script := fmt.Sprintf(`#!/bin/sh
+encoded=""
+for argument in "$@"; do encoded="$argument"; done
+decoded=$( (printf '%%s' "$encoded" | base64 --decode 2>/dev/null || printf '%%s' "$encoded" | base64 -D) | iconv -f UTF-16LE -t UTF-8)
+if printf '%%s' "$decoded" | grep -q "'stop'"; then
+  printf 'STOP %%s\n' "$(cat %[1]s)" >> %[2]s
+  printf '%%s\n' '{"ok":true,"status":"stopped"}'
+else
+  current=$(cat %[1]s)
+  printf 'session-b' > %[1]s
+  printf '{"has_state":true,"derived_status":"running","state":{"status":"running","session_id":"%%s","maya_alive":true,"mcp_alive":true,"call_server_ready":true},"process_alive":{"daemon":true,"maya":true,"mcp":true}}\n' "$current"
+fi
+`, shellQuote(sessionPath), shellQuote(hostLog))
+	if err := os.WriteFile(sshPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessionPath, []byte("session-a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	host := mayaHostConfig{
+		ID: "maya-win-01", Transport: "ssh",
+		SSH:      sshConfig{Host: "maya-win-01", Binary: sshPath},
+		WorkRoot: "C:/maya-stall",
+		Broker: brokerConfig{
+			Type: "gg-mayasessiond", StateDir: "C:/maya-stall/sessiond-ui",
+			Python: "C:/maya-stall/sessiond-venv311/Scripts/python.exe", Repo: "C:/maya-stall/tools/GG_MayaSessiond",
+		},
+	}
+	lockDir, ok := fakeSSHHostSideLockDir(host)
+	if !ok {
+		t.Fatal("fake SSH Host Lock directory unavailable")
+	}
+	lockB := acquireTestHostSideLock(t, lockDir)
+	if err := lockB.markActive("host", "run-b"); err != nil {
+		t.Fatal(err)
+	}
+	record := runRetentionRecord{
+		RunID: "run-a", HostConfig: host,
+		RemoteRunRoot: "C:/maya-stall/runs/run-a",
+		RemoteSession: retainedSessionRecord{BrokerAdapter: "gg-mayasessiond", SessionID: "session-a", Status: "running"},
+	}
+
+	err := ggMayaSessiondBroker{host: host}.StopRetainedRun(record)
+	if !errors.Is(err, errHostLockOwnershipChanged) {
+		t.Fatalf("StopRetainedRun error = %v, want Host Lock ownership change", err)
+	}
+	if got := readOptionalTestFile(t, hostLog); got != "" {
+		t.Fatalf("kept run A stopped a session after losing its Host Lock:\n%s", got)
+	}
+	remote := host
+	remote.SSH.Binary = filepath.Join(dir, "ssh")
+	if fence := keptHostLockFence(remote, "run-a"); !strings.Contains(fence.hostScript, "$fenceField = 'keptRun'") || !strings.Contains(fence.hostScript, "$fenceValue = 'run-a'") {
+		t.Fatalf("remote kept fence does not match keptRun run-a:\n%s", fence.hostScript)
 	}
 }
 

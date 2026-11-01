@@ -555,6 +555,7 @@ func (broker ggMayaSessiondBroker) StopRetainedRun(record runRetentionRecord) er
 	if err != nil {
 		return err
 	}
+	broker.fence = keptHostLockFence(record.HostConfig, record.RunID)
 	if status.State != "kept" {
 		if strings.TrimSpace(remoteRunRoot) == "" {
 			return fmt.Errorf("refusing to stop retained run %s because broker state is %s and no remote workspace cleanup path is recorded: %s", record.RunID, status.State, status.Detail)
