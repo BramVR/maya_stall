@@ -160,7 +160,7 @@ func TestLocalWindowsBrokerStartsAndOwnsExactDirectSessiondSession(t *testing.T)
 	if err := os.WriteFile(eventsPath, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	identity, err := broker.StartFreshSession(runContext{EventsPath: eventsPath}, scenarioConfig{})
+	identity, err := broker.StartFreshSession(runContext{EventsPath: eventsPath, HostLock: ownedTestHostLock}, scenarioConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestLocalWindowsBrokerWaitsForMayaToolReadinessAfterCallServerStarts(t *tes
 		}
 	}
 
-	identity, err := broker.StartFreshSession(runContext{EventsPath: filepath.Join(t.TempDir(), "events.jsonl")}, scenarioConfig{})
+	identity, err := broker.StartFreshSession(runContext{EventsPath: filepath.Join(t.TempDir(), "events.jsonl"), HostLock: ownedTestHostLock}, scenarioConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

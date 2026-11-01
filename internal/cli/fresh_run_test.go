@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -897,6 +898,7 @@ func TestGGMayaSessiondFreshRunFailsClosedWhenInheritedSessionStopFails(t *testi
 var ownedTestHostLock = hostLockFence{claim: func() error { return nil }}
 
 func TestGGMayaSessiondStartRefusedAfterHostLockLeaseLapses(t *testing.T) {
+	requirePOSIXShellFakeSSH(t)
 	for _, reclaimed := range []bool{true, false} {
 		t.Run(map[bool]string{true: "reclaimed", false: "expired"}[reclaimed], func(t *testing.T) {
 			dir := t.TempDir()
@@ -954,6 +956,7 @@ func TestGGMayaSessiondStartRefusedAfterHostLockLeaseLapses(t *testing.T) {
 }
 
 func TestGGMayaSessiondRemoteFenceRunsInTheSameHostScriptAsTheAction(t *testing.T) {
+	requirePOSIXShellFakeSSH(t)
 	dir := t.TempDir()
 	stdinLog := filepath.Join(dir, "stdin.log")
 	sshPath := filepath.Join(dir, "fake-ssh-remote-fence")
@@ -1021,6 +1024,7 @@ func TestHostLockClaimRefusesLeaseThatExpiresWhileWaitingForTheMutex(t *testing.
 }
 
 func TestGGMayaSessiondRemoteFenceIgnoresMarkerTextInActionOutput(t *testing.T) {
+	requirePOSIXShellFakeSSH(t)
 	dir := t.TempDir()
 	sshPath := filepath.Join(dir, "fake-ssh-marker-output")
 	output := `{"ok":true,"tool":"script.execute","result":"` + remoteHostLockFenceRefused + `"}`
@@ -1043,6 +1047,7 @@ func TestGGMayaSessiondRemoteFenceIgnoresMarkerTextInActionOutput(t *testing.T) 
 }
 
 func TestGGMayaSessiondKeptStopRefusedAfterKeptLockChangesHands(t *testing.T) {
+	requirePOSIXShellFakeSSH(t)
 	dir := t.TempDir()
 	hostLog := filepath.Join(dir, "host.log")
 	sessionPath := filepath.Join(dir, "session")
@@ -1102,6 +1107,13 @@ fi
 	remote.SSH.Binary = filepath.Join(dir, "ssh")
 	if fence := keptHostLockFence(remote, "run-a"); !strings.Contains(fence.hostScript, "$fenceField = 'keptRun'") || !strings.Contains(fence.hostScript, "$fenceValue = 'run-a'") {
 		t.Fatalf("remote kept fence does not match keptRun run-a:\n%s", fence.hostScript)
+	}
+}
+
+func requirePOSIXShellFakeSSH(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake SSH Host is a POSIX shell script")
 	}
 }
 
