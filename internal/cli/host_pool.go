@@ -31,6 +31,7 @@ type hostRuntime struct {
 	markActive    func(string) error
 	markKept      func(string) error
 	bindSession   func(string) error
+	fence         hostLockFence
 }
 
 type hostValidationError struct {
@@ -47,6 +48,25 @@ type runHostLock struct {
 	markActive  func(string) error
 	markKept    func(string) error
 	bindSession func(string) error
+	fence       hostLockFence
+}
+
+// hostLockFence ties a Session Broker action that starts, stops, or drives
+// Maya to this run's Host Lock. Before the action, the Maya Host proves under
+// the lock mutex that the run still owns an unexpired lease and renews it.
+// Doing that in the same Host step as the action, with no controller round
+// trip in between, means a run whose lease expired and was reclaimed cannot
+// act on the new owner's Maya UI Session.
+type hostLockFence struct {
+	// hostScript is PowerShell that runs on the Maya Host in the same script
+	// as the action.
+	hostScript string
+	// claim runs in-process, for locks whose mutex lives on this machine.
+	claim func() error
+}
+
+func (fence hostLockFence) isZero() bool {
+	return fence.hostScript == "" && fence.claim == nil
 }
 
 type hostLockOwner struct {
@@ -71,6 +91,37 @@ type hostSideLock struct {
 	expected     string
 	replaceOwner func(string, string) error
 	remove       func(string) error
+	// hostFenceScript is set for locks held on a remote Maya Host.
+	hostFenceScript string
+}
+
+func (lock *hostSideLock) fence(hostID string) hostLockFence {
+	if lock.hostFenceScript != "" {
+		return hostLockFence{hostScript: lock.hostFenceScript}
+	}
+	if lock.expected == "" {
+		return hostLockFence{}
+	}
+	return hostLockFence{claim: func() error { return lock.claim(hostID) }}
+}
+
+// claim is renew that refuses an expired lease, even one nobody reclaimed yet.
+func (lock *hostSideLock) claim(hostID string) error {
+	lock.mu.Lock()
+	defer lock.mu.Unlock()
+	owner := parseHostLockOwner(lock.expected)
+	if owner.KeptRun != "" {
+		return lock.replaceOwner(lock.expected, lock.expected)
+	}
+	if isStaleHostSideOwner(owner) {
+		return fmt.Errorf("%w: lease expired", errHostLockOwnershipChanged)
+	}
+	content := hostSideLockOwnerContent(hostID, owner, owner.ActiveRun, "", true)
+	if err := lock.replaceOwner(lock.expected, content); err != nil {
+		return err
+	}
+	lock.expected = content
+	return nil
 }
 
 func (lock *hostSideLock) release() error {
@@ -464,6 +515,7 @@ func selectHostForRunValidated(repoDir string, options runOptions, validate func
 				markActive:    lock.markActive,
 				markKept:      lock.markKept,
 				bindSession:   lock.bindSession,
+				fence:         lock.fence,
 			}, nil
 		}
 
@@ -713,6 +765,7 @@ func acquireRunHostLock(repoDir string, host mayaHostConfig) (runHostLock, bool,
 		bindSession: func(sessionID string) error {
 			return hostSideLock.bindSession(host.ID, sessionID)
 		},
+		fence: hostSideLock.fence(host.ID),
 	}, false, nil
 }
 

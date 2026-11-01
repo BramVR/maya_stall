@@ -95,7 +95,7 @@ execute, and settle flow:
 6. Resolve the Host/Broker runtime contract.
 7. Opportunistically expire overdue Kept Sessions recorded for each candidate Maya Host, then acquire a Host Lock.
 8. Run bounded transport and Session Broker status probes; release the Host Lock and fail at the named layer if either is unavailable.
-9. Ask the Session Broker to stop any inherited Maya UI Session and start a new identified Maya UI Session.
+9. Ask the Session Broker to stop any inherited Maya UI Session and start a new identified Maya UI Session, each only while the Maya Host proves this run still owns an unexpired Host Lock.
 10. Bind that exact Sessiond session ID to the authoritative Host Lock.
 11. Verify and stage only declared Run Payload paths.
 12. Provide `MAYA_STALL_SCENARIO_RESULT` and `MAYA_STALL_RUNTIME_INPUTS` to the Scenario.
@@ -286,6 +286,13 @@ An expired lease is recoverable only after the configured Session Broker proves
 that no Maya UI Session is active. Unreadable ownership, a live lease, or an
 unavailable/active broker fails closed. The repo-local lock remains as a mirror
 for local commands and migration, but it is not the authority for an SSH host.
+
+Session Broker calls that start, stop, or drive Maya are fenced by the Host
+Lock. In the same Maya Host step as the call, under the lock mutex, the Host
+checks that the run's lock token still owns an unexpired lease and renews it.
+A run whose lease lapsed, for example after a long controller stall, fails with
+a Host Lock ownership error instead of starting Maya under another run's lock
+or stopping that run's session.
 
 Use `--host-lock-wait <duration>` to wait for a busy host or
 `--host-lock-fail-fast` to fail immediately.

@@ -136,6 +136,8 @@ type runContext struct {
 	LogPath            string
 	ScenarioResultPath string
 	Environment        map[string]string
+	// HostLock fences broker actions that start, stop, or drive Maya.
+	HostLock hostLockFence
 }
 
 type runOutcome struct {

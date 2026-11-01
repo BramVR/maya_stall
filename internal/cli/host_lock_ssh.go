@@ -86,7 +86,7 @@ func acquireRemoteHostLock(host mayaHostConfig, content string) (*hostSideLock, 
 		if err != nil {
 			state, stateErr := readRemoteHostLockState(host, lockPath)
 			if stateErr == nil && state.Raw == content {
-				return newRemoteHostSideLock(host, content), false, nil
+				return newRemoteHostSideLock(host, lockPath, content), false, nil
 			}
 			return nil, false, errors.Join(err, stateErr)
 		}
@@ -94,7 +94,7 @@ func acquireRemoteHostLock(host mayaHostConfig, content string) (*hostSideLock, 
 			return nil, false, errors.New(result.Error)
 		}
 		if !result.Locked {
-			return newRemoteHostSideLock(host, content), false, nil
+			return newRemoteHostSideLock(host, lockPath, content), false, nil
 		}
 		// The staleness decision happens on the client. Expired active leases
 		// can be reclaimed by any controller; kept locks remain durable. Losing the
@@ -178,9 +178,10 @@ func sessiondStatusProvesInactive(status sessiondStatusResult) bool {
 	return true
 }
 
-func newRemoteHostSideLock(host mayaHostConfig, content string) *hostSideLock {
+func newRemoteHostSideLock(host mayaHostConfig, lockPath string, content string) *hostSideLock {
 	return &hostSideLock{
-		expected: content,
+		expected:        content,
+		hostFenceScript: remoteHostLockFenceScript(lockPath, parseHostLockOwner(content).LockToken),
 		replaceOwner: func(expected string, replacement string) error {
 			return replaceRemoteHostLockOwner(host, expected, replacement)
 		},
@@ -608,6 +609,36 @@ $result = Invoke-WithLockMutex $lockPath {
   return @{state='unlocked'}
 }
 Out-Result $result`, powerShellSingleQuoted(lockPath), powerShellSingleQuoted(runID), remoteHostLockCommonPS)
+}
+
+const remoteHostLockFenceRefused = "maya-stall-host-lock-fence: refused"
+
+// remoteHostLockFenceScript is the Host-side preamble of a fenced broker
+// action. Under the lock mutex it proves lockToken still owns the lock with an
+// unexpired lease, then renews the lease by touching LastWriteTimeUtc, the Host
+// clock anchor Locked-Result measures age from. Content stays unchanged, so
+// the controller's exact-content compare-and-swap stays valid, while any
+// reclaimer's observed leaseVersion goes stale. On refusal it prints a marker
+// and throws, so the action never runs.
+func remoteHostLockFenceScript(lockPath string, token string) string {
+	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+$fenceLockPath = %s
+$fenceToken = %s
+%s
+$fenceOwned = Invoke-WithLockMutex $fenceLockPath {
+  if (!(Test-Path -LiteralPath $fenceLockPath)) { return $false }
+  $fields = Locked-Result $fenceLockPath
+  if ($fields.lockToken -cne $fenceToken) { return $false }
+  if ($fields.state -eq 'kept') { return $true }
+  if ($fields.leaseExpired) { return $false }
+  [System.IO.File]::SetLastWriteTimeUtc($fenceLockPath, [DateTime]::UtcNow)
+  return $true
+}
+if ($fenceOwned -ne $true) {
+  [Console]::Out.WriteLine(%s)
+  [Console]::Out.Flush()
+  throw 'Host Lock ownership changed on Maya Host'
+}`, powerShellSingleQuoted(lockPath), powerShellSingleQuoted(token), remoteHostLockCommonPS, powerShellSingleQuoted(remoteHostLockFenceRefused))
 }
 
 func remoteHostLockStateScript(lockPath string) string {

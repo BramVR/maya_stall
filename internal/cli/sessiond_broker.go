@@ -34,7 +34,8 @@ var waitSessiondSessionPoll = func() {
 }
 
 type ggMayaSessiondBroker struct {
-	host mayaHostConfig
+	host  mayaHostConfig
+	fence hostLockFence
 }
 
 var runLocalSessiondCommand = defaultRunLocalSessiondCommand
@@ -103,11 +104,20 @@ func (broker ggMayaSessiondBroker) StartFreshSession(context runContext, scenari
 	if err := broker.validate(); err != nil {
 		return brokerSessionIdentity{}, err
 	}
+	broker.fence = context.HostLock
+	if broker.fence.isZero() {
+		return brokerSessionIdentity{}, fmt.Errorf("refusing to start a Maya UI Session without this run's Host Lock fence")
+	}
 	status, err := broker.status()
 	if err != nil {
 		return brokerSessionIdentity{}, fmt.Errorf("inspect inherited gg_mayasessiond Maya UI Session: %w", err)
 	}
 	previousSessionID := status.State.SessionID
+	// The stop is fenced: it runs only in a Host step that proves this run
+	// owns the Host Lock right now. Every run starts Maya behind the same fence
+	// and reclaim needs an inactive broker, so no other run can own a live
+	// session while this run holds the lock. What remains is the Host's
+	// standing broker session.
 	if sessiondSessionLooksActive(status) {
 		if err := broker.stopSessiondSession(); err != nil {
 			return brokerSessionIdentity{}, fmt.Errorf("stop inherited gg_mayasessiond Maya UI Session: %w", err)
@@ -131,6 +141,7 @@ func (broker ggMayaSessiondBroker) StartFreshSession(context runContext, scenari
 }
 
 func (broker ggMayaSessiondBroker) VerifyMayaBuild(context runContext, session brokerSessionIdentity, expected string) error {
+	broker.fence = context.HostLock
 	status, err := broker.status()
 	if err != nil {
 		return fmt.Errorf("inspect fresh Maya UI Session before build verification: %w", err)
@@ -195,6 +206,7 @@ func (broker ggMayaSessiondBroker) StopSession(context runContext, session broke
 	if err := broker.validate(); err != nil {
 		return err
 	}
+	broker.fence = context.HostLock
 	status, err := broker.status()
 	if err != nil {
 		return err
@@ -324,6 +336,7 @@ func (broker ggMayaSessiondBroker) RunScenario(context runContext, scenario scen
 	if err := broker.validate(); err != nil {
 		return ScenarioResult{}, err
 	}
+	broker.fence = context.HostLock
 	if err := appendEvent(context.EventsPath, "broker.session.started", scenario.MayaVersion); err != nil {
 		return ScenarioResult{}, err
 	}
@@ -827,10 +840,37 @@ func (broker ggMayaSessiondBroker) restartSessionBrokerTask(reason string) error
 		return nil
 	}
 	taskName := sessiondRecoveryTaskName(broker.host)
-	if _, err := runSSHCommandOutput(broker.host, encodedPowerShellCommand(sessiondTaskRestartScript(taskName, reason)), sessiondCommandTimeout+2*time.Minute); err != nil {
+	if _, err := broker.runHostPowerShell(sessiondTaskRestartScript(taskName, reason), true, sessiondCommandTimeout+2*time.Minute); err != nil {
 		return fmt.Errorf("restart scheduled task %q: %w", taskName, err)
 	}
 	return nil
+}
+
+// runHostPowerShell runs script on the Maya Host over SSH. A fenced script
+// runs only while this run still owns its Host Lock; see hostLockFence.
+func (broker ggMayaSessiondBroker) runHostPowerShell(script string, fenced bool, timeout time.Duration) ([]byte, error) {
+	if !fenced || broker.fence.isZero() {
+		return runSSHCommandOutput(broker.host, encodedPowerShellCommand(script), timeout)
+	}
+	if broker.fence.claim != nil {
+		if err := broker.fence.claim(); err != nil {
+			return nil, err
+		}
+		return runSSHCommandOutput(broker.host, encodedPowerShellCommand(script), timeout)
+	}
+	// The fence preamble makes the script too long for a command line, so it
+	// goes over stdin like the Host Lock scripts.
+	raw, err := runSSHCommandOutputWithInput(broker.host, encodedPowerShellCommand(remoteHostLockStdinRunnerPS), broker.fence.hostScript+"\n"+script+"\n", timeout)
+	if bytes.Contains(raw, []byte(remoteHostLockFenceRefused)) {
+		return nil, fmt.Errorf("%w on Maya Host", errHostLockOwnershipChanged)
+	}
+	return raw, err
+}
+
+// sessiondCommandTouchesMaya reports whether a gg_mayasessiond CLI command
+// starts, stops, or drives the Maya UI Session, as opposed to reading status.
+func sessiondCommandTouchesMaya(command string) bool {
+	return command == "start" || command == "stop" || command == "call"
 }
 
 func sessiondTaskRestartScript(taskName string, reason string) string {
@@ -1088,7 +1128,16 @@ func (broker ggMayaSessiondBroker) runSessiondCLIWithMarker(args []string, timeo
 	if err := broker.validate(); err != nil {
 		return nil, err
 	}
+	fenced := sessiondCommandTouchesMaya(args[0]) && !broker.fence.isZero()
 	if broker.host.usesLocalWindows() {
+		if fenced {
+			if broker.fence.claim == nil {
+				return nil, fmt.Errorf("local gg_mayasessiond requires a local Host Lock fence")
+			}
+			if err := broker.fence.claim(); err != nil {
+				return nil, err
+			}
+		}
 		raw, err := runLocalSessiondCommand(broker, args, timeout)
 		if err != nil {
 			if args[0] == "status" {
@@ -1111,8 +1160,11 @@ func (broker ggMayaSessiondBroker) runSessiondCLIWithMarker(args []string, timeo
 %s
 Set-Location -LiteralPath %s
 & %s -m gg_maya_sessiond.cli @(%s)`, marker, powerShellSingleQuoted(broker.host.Broker.Repo), powerShellSingleQuoted(broker.host.Broker.Python), strings.Join(quoted, ","))
-	raw, err := runSSHCommandOutput(broker.host, encodedPowerShellCommand(script), timeout)
+	raw, err := broker.runHostPowerShell(script, fenced, timeout)
 	if err != nil {
+		if errors.Is(err, errHostLockOwnershipChanged) {
+			return nil, fmt.Errorf("run gg_mayasessiond %s: %w", args[0], err)
+		}
 		if failClosedOnTimeout && errors.Is(err, errSSHCommandTimedOut) {
 			return nil, fmt.Errorf("run gg_mayasessiond %s: %w", args[0], err)
 		}
