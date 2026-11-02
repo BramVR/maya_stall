@@ -34,8 +34,11 @@ func (transport sshWindowsDesktopTransport) RunPowerShell(script string, timeout
 	return runSSHCommandOutputWithInput(mayaHostConfig(transport), windowsPowerShellStdinCommand(), script, timeout)
 }
 
+// windowsPowerShellStdinCommand reads the whole script before running it.
+// "powershell -Command -" runs stdin line by line, so multi-line constructs
+// such as here-strings and try/finally silently do nothing and exit 0.
 func windowsPowerShellStdinCommand() []string {
-	return []string{"powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"}
+	return encodedPowerShellCommand(remoteHostLockStdinRunnerPS)
 }
 
 func (transport sshWindowsDesktopTransport) WritePowerShellScript(remotePath string, content string, timeout time.Duration) error {
