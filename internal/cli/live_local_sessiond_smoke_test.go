@@ -342,7 +342,7 @@ $validatorsPassed = @($bundle.validators | Where-Object {$_.status -ne "passed"}
  hostLockExists=(Test-Path -LiteralPath %s); runRootExists=(Test-Path -LiteralPath %s); localRunStateExists=(Test-Path -LiteralPath %s); portListening=[bool](Get-NetTCPConnection -State Listen -LocalPort %d -ErrorAction SilentlyContinue)
 } | ConvertTo-Json -Compress
 `, powerShellSingleQuoted(evidenceDir), powerShellSingleQuoted(host.Broker.Repo), powerShellSingleQuoted(host.Broker.Python), powerShellSingleQuoted(stateDir), powerShellSingleQuoted(remoteJoin(proofRoot, "ownership.json")), powerShellSingleQuoted(remoteJoin(proofRoot, "input.ma")), powerShellSingleQuoted(remoteJoin(workRoot, "state", "locks", "hosts", "host.lock")), powerShellSingleQuoted(remoteJoin(workRoot, "runs", runID)), powerShellSingleQuoted(remoteJoin(consumerRoot, ".maya-stall", "state", "runs", runID)), port)
-	raw, err := runSSHCommandOutput(host, encodedPowerShellCommand(script), sessiondCommandTimeout)
+	raw, err := sshWindowsDesktopTransport(host).RunPowerShell(script, sessiondCommandTimeout)
 	if err != nil {
 		t.Fatalf("inspect local Sessiond live proof: %v", err)
 	}

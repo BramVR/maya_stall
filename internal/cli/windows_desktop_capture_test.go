@@ -110,8 +110,11 @@ func TestSSHWindowsDesktopTransportStreamsLongPowerShellOverStdin(t *testing.T) 
 		t.Fatalf("desktop screenshot encoded command length = %d, want proof it leaves unsafe headroom under the Windows default-shell command-line limit", len(encoded))
 	}
 	command := strings.Join(windowsPowerShellStdinCommand(), " ")
-	if !strings.Contains(command, "-Command -") || strings.Contains(command, "-EncodedCommand") {
-		t.Fatalf("SSH desktop PowerShell command must read the script from stdin: %s", command)
+	if len(command) > 1000 || strings.Contains(command, "-Command -") {
+		t.Fatalf("SSH desktop PowerShell command must stay short and read the whole script from stdin before running it: %s", command)
+	}
+	if !strings.Contains(remoteHostLockStdinRunnerPS, "[Console]::In.ReadToEnd()") {
+		t.Fatalf("SSH desktop PowerShell runner must read all of stdin as one script:\n%s", remoteHostLockStdinRunnerPS)
 	}
 }
 
