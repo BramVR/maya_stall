@@ -448,6 +448,7 @@ func (run *freshRunLifecycle) setup() error {
 		host.release = func() error { return nil }
 	}
 	run.host = host
+	run.context.HostLock = host.fence
 	run.releaseHostLock = true
 	run.stopHostLockHeartbeat, run.checkHostLockHeartbeat = startHostLockHeartbeat(run.host.renew)
 	run.resolvedRuntime = resolved

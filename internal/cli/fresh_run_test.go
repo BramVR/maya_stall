@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -888,10 +889,297 @@ func TestGGMayaSessiondFreshRunFailsClosedWhenInheritedSessionStopFails(t *testi
 		},
 	}}
 
-	_, err := broker.StartFreshSession(runContext{EventsPath: eventsPath}, scenarioConfig{})
+	_, err := broker.StartFreshSession(runContext{EventsPath: eventsPath, HostLock: ownedTestHostLock}, scenarioConfig{})
 	if err == nil || !strings.Contains(err.Error(), "stop inherited gg_mayasessiond Maya UI Session") || !strings.Contains(err.Error(), "inherited session stop failed") {
 		t.Fatalf("StartFreshSession error = %v, want inherited session stop failure", err)
 	}
+}
+
+var ownedTestHostLock = hostLockFence{claim: func() error { return nil }}
+
+func TestGGMayaSessiondStartRefusedAfterHostLockLeaseLapses(t *testing.T) {
+	requirePOSIXShellFakeSSH(t)
+	for _, reclaimed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "reclaimed", false: "expired"}[reclaimed], func(t *testing.T) {
+			dir := t.TempDir()
+			lockDir := filepath.Join(dir, "locks")
+			hostLog := filepath.Join(dir, "host.log")
+			broker := ggMayaSessiondBroker{host: mayaHostConfig{
+				Transport: "ssh",
+				SSH:       sshConfig{Host: "maya-win-01", Binary: writeStatefulSessiondFakeSSH(t, dir, hostLog)},
+				WorkRoot:  "C:/maya-stall",
+				Broker: brokerConfig{
+					Type:     "gg-mayasessiond",
+					StateDir: "C:/maya-stall/sessiond-ui",
+					Python:   "C:/maya-stall/sessiond-venv311/Scripts/python.exe",
+					Repo:     "C:/maya-stall/tools/GG_MayaSessiond",
+				},
+			}}
+			lockA := acquireTestHostSideLock(t, lockDir)
+			if err := lockA.markActive("host", "run-a"); err != nil {
+				t.Fatalf("mark run A active: %v", err)
+			}
+			// Run A's last renew succeeds, then its lease lapses before the
+			// broker call lands (controller stall, sleep, clock skew).
+			lease := hostSideLockLeaseDuration
+			hostSideLockLeaseDuration = time.Millisecond
+			renewErr := lockA.renew("host")
+			hostSideLockLeaseDuration = lease
+			if renewErr != nil {
+				t.Fatalf("renew run A: %v", renewErr)
+			}
+			time.Sleep(10 * time.Millisecond)
+			var lockB *hostSideLock
+			if reclaimed {
+				lockB = acquireTestHostSideLock(t, lockDir)
+			}
+
+			_, err := broker.StartFreshSession(runContext{EventsPath: filepath.Join(dir, "a.jsonl"), HostLock: lockA.fence("host")}, scenarioConfig{})
+			if !errors.Is(err, errHostLockOwnershipChanged) {
+				t.Fatalf("run A StartFreshSession error = %v, want Host Lock ownership change", err)
+			}
+			if got := readOptionalTestFile(t, hostLog); got != "" {
+				t.Fatalf("run A touched Maya without owning the Host Lock:\n%s", got)
+			}
+			if !reclaimed {
+				return
+			}
+			session, err := broker.StartFreshSession(runContext{EventsPath: filepath.Join(dir, "b.jsonl"), HostLock: lockB.fence("host")}, scenarioConfig{})
+			if err != nil {
+				t.Fatalf("run B StartFreshSession: %v", err)
+			}
+			if got, want := readOptionalTestFile(t, hostLog), "START "+session.SessionID+"\n"; got != want {
+				t.Fatalf("Maya Host lifecycle = %q, want only run B's start %q", got, want)
+			}
+		})
+	}
+}
+
+func TestGGMayaSessiondRemoteFenceRunsInTheSameHostScriptAsTheAction(t *testing.T) {
+	requirePOSIXShellFakeSSH(t)
+	dir := t.TempDir()
+	stdinLog := filepath.Join(dir, "stdin.log")
+	sshPath := filepath.Join(dir, "fake-ssh-remote-fence")
+	// Status goes over the command line. A fenced action arrives on stdin,
+	// where this Host refuses it the way the fence preamble does.
+	script := fmt.Sprintf(`#!/bin/sh
+input=$(cat)
+if [ -z "$input" ]; then
+  printf '%%s\n' %s
+  exit 0
+fi
+printf '%%s' "$input" > %s
+printf '%%s\n' %s
+exit 1
+`, shellQuote(sessiondStatusFixture("session-owned")), shellQuote(stdinLog), shellQuote(remoteHostLockFenceRefused))
+	if err := os.WriteFile(sshPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	broker := ggMayaSessiondBroker{host: mayaHostConfig{
+		Transport: "ssh",
+		SSH:       sshConfig{Host: "maya-win-01", Binary: sshPath},
+		WorkRoot:  "C:/maya-stall",
+		Broker: brokerConfig{
+			Type:     "gg-mayasessiond",
+			StateDir: "C:/maya-stall/sessiond-ui",
+			Python:   "C:/maya-stall/sessiond-venv311/Scripts/python.exe",
+			Repo:     "C:/maya-stall/tools/GG_MayaSessiond",
+		},
+	}}
+	fence := hostLockFence{hostScript: remoteHostLockFenceScript("C:/maya-stall/state/locks/host.lock", "lockToken", "token-a")}
+
+	err := broker.StopSession(runContext{EventsPath: filepath.Join(dir, "events.jsonl"), HostLock: fence}, brokerSessionIdentity{BrokerAdapter: "gg-mayasessiond", SessionID: "session-owned"})
+	if !errors.Is(err, errHostLockOwnershipChanged) {
+		t.Fatalf("StopSession error = %v, want Host Lock ownership change", err)
+	}
+	sent := readOptionalTestFile(t, stdinLog)
+	fenceAt := strings.Index(sent, "$fenceValue = 'token-a'")
+	actionAt := strings.Index(sent, "gg_maya_sessiond.cli @('stop'")
+	if fenceAt < 0 || actionAt < fenceAt || !strings.Contains(sent, "Invoke-WithLockMutex $fenceLockPath") {
+		t.Fatalf("fenced stop script does not prove Host Lock ownership before stopping:\n%s", sent)
+	}
+}
+
+func TestHostLockClaimRefusesLeaseThatExpiresWhileWaitingForTheMutex(t *testing.T) {
+	lockDir := t.TempDir()
+	lease := hostSideLockLeaseDuration
+	hostSideLockLeaseDuration = 300 * time.Millisecond
+	lock := acquireTestHostSideLock(t, lockDir)
+	hostSideLockLeaseDuration = lease
+	expiresAt, err := time.Parse(time.RFC3339Nano, parseHostLockOwner(lock.expected).LeaseExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed := make(chan error, 1)
+	if err := withLocalHostSideMutex(lockDir, "host", func() error {
+		go func() { claimed <- lock.fence("host").claim() }()
+		time.Sleep(time.Until(expiresAt) + 50*time.Millisecond)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-claimed; !errors.Is(err, errHostLockOwnershipChanged) {
+		t.Fatalf("claim after the lease expired under the mutex = %v, want Host Lock ownership change", err)
+	}
+}
+
+func TestGGMayaSessiondRemoteFenceIgnoresMarkerTextInActionOutput(t *testing.T) {
+	requirePOSIXShellFakeSSH(t)
+	dir := t.TempDir()
+	sshPath := filepath.Join(dir, "fake-ssh-marker-output")
+	output := `{"ok":true,"tool":"script.execute","result":"` + remoteHostLockFenceRefused + `"}`
+	if err := os.WriteFile(sshPath, []byte("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' "+shellQuote(output)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	broker := ggMayaSessiondBroker{
+		host: mayaHostConfig{
+			Transport: "ssh",
+			SSH:       sshConfig{Host: "maya-win-01", Binary: sshPath},
+			WorkRoot:  "C:/maya-stall",
+			Broker:    brokerConfig{Type: "gg-mayasessiond", StateDir: "C:/maya-stall/sessiond-ui", Python: "C:/python.exe", Repo: "C:/sessiond"},
+		},
+		fence: hostLockFence{hostScript: remoteHostLockFenceScript("C:/maya-stall/state/locks/host.lock", "lockToken", "token-a")},
+	}
+	result, err := broker.callTool("script.execute", nil, time.Minute)
+	if err != nil || !result.OK {
+		t.Fatalf("callTool = %+v, %v; want the action's successful result", result, err)
+	}
+}
+
+func TestGGMayaSessiondKeptStopRefusedAfterKeptLockChangesHands(t *testing.T) {
+	requirePOSIXShellFakeSSH(t)
+	dir := t.TempDir()
+	hostLog := filepath.Join(dir, "host.log")
+	sessionPath := filepath.Join(dir, "session")
+	sshPath := filepath.Join(dir, "fake-ssh-kept-stop")
+	// Status reports kept run A's session; run B then owns the Host and its
+	// session before A's stop lands.
+	script := fmt.Sprintf(`#!/bin/sh
+encoded=""
+for argument in "$@"; do encoded="$argument"; done
+decoded=$( (printf '%%s' "$encoded" | base64 --decode 2>/dev/null || printf '%%s' "$encoded" | base64 -D) | iconv -f UTF-16LE -t UTF-8)
+if printf '%%s' "$decoded" | grep -q "'stop'"; then
+  printf 'STOP %%s\n' "$(cat %[1]s)" >> %[2]s
+  printf '%%s\n' '{"ok":true,"status":"stopped"}'
+else
+  current=$(cat %[1]s)
+  printf 'session-b' > %[1]s
+  printf '{"has_state":true,"derived_status":"running","state":{"status":"running","session_id":"%%s","maya_alive":true,"mcp_alive":true,"call_server_ready":true},"process_alive":{"daemon":true,"maya":true,"mcp":true}}\n' "$current"
+fi
+`, shellQuote(sessionPath), shellQuote(hostLog))
+	if err := os.WriteFile(sshPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessionPath, []byte("session-a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	host := mayaHostConfig{
+		ID: "maya-win-01", Transport: "ssh",
+		SSH:      sshConfig{Host: "maya-win-01", Binary: sshPath},
+		WorkRoot: "C:/maya-stall",
+		Broker: brokerConfig{
+			Type: "gg-mayasessiond", StateDir: "C:/maya-stall/sessiond-ui",
+			Python: "C:/maya-stall/sessiond-venv311/Scripts/python.exe", Repo: "C:/maya-stall/tools/GG_MayaSessiond",
+		},
+	}
+	lockDir, ok := fakeSSHHostSideLockDir(host)
+	if !ok {
+		t.Fatal("fake SSH Host Lock directory unavailable")
+	}
+	lockB := acquireTestHostSideLock(t, lockDir)
+	if err := lockB.markActive("host", "run-b"); err != nil {
+		t.Fatal(err)
+	}
+	record := runRetentionRecord{
+		RunID: "run-a", HostConfig: host,
+		RemoteRunRoot: "C:/maya-stall/runs/run-a",
+		RemoteSession: retainedSessionRecord{BrokerAdapter: "gg-mayasessiond", SessionID: "session-a", Status: "running"},
+	}
+
+	err := ggMayaSessiondBroker{host: host}.StopRetainedRun(record)
+	if !errors.Is(err, errHostLockOwnershipChanged) {
+		t.Fatalf("StopRetainedRun error = %v, want Host Lock ownership change", err)
+	}
+	if got := readOptionalTestFile(t, hostLog); got != "" {
+		t.Fatalf("kept run A stopped a session after losing its Host Lock:\n%s", got)
+	}
+	remote := host
+	remote.SSH.Binary = filepath.Join(dir, "ssh")
+	if fence := keptHostLockFence(remote, "run-a"); !strings.Contains(fence.hostScript, "$fenceField = 'keptRun'") || !strings.Contains(fence.hostScript, "$fenceValue = 'run-a'") {
+		t.Fatalf("remote kept fence does not match keptRun run-a:\n%s", fence.hostScript)
+	}
+}
+
+func requirePOSIXShellFakeSSH(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake SSH Host is a POSIX shell script")
+	}
+}
+
+func acquireTestHostSideLock(t *testing.T, lockDir string) *hostSideLock {
+	t.Helper()
+	content, err := hostSideLockContent("host", "C:/maya-stall/sessiond-ui", "C:/maya-stall/sessiond-venv311/Scripts/python.exe", "C:/maya-stall/tools/GG_MayaSessiond", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, locked, err := acquireLocalHostSideLock(lockDir, "host", content, isStaleHostSideLock)
+	if err != nil || locked {
+		t.Fatalf("acquire Host Lock: locked=%v err=%v", locked, err)
+	}
+	return lock
+}
+
+func readOptionalTestFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
+}
+
+// writeStatefulSessiondFakeSSH fakes one Maya Host whose gg_mayasessiond
+// remembers its session across calls and logs every start and stop.
+func writeStatefulSessiondFakeSSH(t *testing.T, dir string, hostLog string) string {
+	t.Helper()
+	path := filepath.Join(dir, "fake-ssh-stateful")
+	sessionPath := filepath.Join(dir, "session")
+	countPath := filepath.Join(dir, "session.count")
+	content := fmt.Sprintf(`#!/bin/sh
+encoded=""
+for argument in "$@"; do
+  encoded="$argument"
+done
+decoded=$( (printf '%%s' "$encoded" | base64 --decode 2>/dev/null || printf '%%s' "$encoded" | base64 -D) | iconv -f UTF-16LE -t UTF-8)
+if printf '%%s' "$decoded" | grep -q "fresh-run"; then
+  count=$(cat %[2]s 2>/dev/null || echo 0)
+  count=$((count + 1))
+  printf '%%s\n' "$count" > %[2]s
+  printf 'session-%%s' "$count" > %[1]s
+  printf 'START session-%%s\n' "$count" >> %[3]s
+  printf '%%s\n' '{"ok":true,"task":"MayaStallSessiondUI","reason":"fresh-run"}'
+elif printf '%%s' "$decoded" | grep -q "'stop'"; then
+  printf 'STOP %%s\n' "$(cat %[1]s)" >> %[3]s
+  rm -f %[1]s
+  printf '%%s\n' '{"ok":true,"status":"stopped"}'
+elif printf '%%s' "$decoded" | grep -q "scene.info"; then
+  printf '%%s\n' '{"ok":true,"tool":"scene.info"}'
+elif printf '%%s' "$decoded" | grep -q "viewport.capture"; then
+  printf '%%s\n' '{"ok":true,"tool":"viewport.capture","content":[{"type":"image","data":"AA==","mimeType":"image/jpeg"}]}'
+elif [ -f %[1]s ]; then
+  printf '{"has_state":true,"derived_status":"running","state":{"status":"running","session_id":"%%s","maya_alive":true,"mcp_alive":true,"call_server_ready":true},"process_alive":{"daemon":true,"maya":true,"mcp":true}}\n' "$(cat %[1]s)"
+else
+  printf '%%s\n' '{"has_state":true,"derived_status":"stopped","state":{"status":"stopped"},"process_alive":{"daemon":false,"maya":false,"mcp":false}}'
+fi
+`, shellQuote(sessionPath), shellQuote(countPath), shellQuote(hostLog))
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestGGMayaSessiondStopSessionFailsClosedWithoutCurrentIdentity(t *testing.T) {
@@ -960,7 +1248,7 @@ func TestGGMayaSessiondFreshRunReturnsPartialIdentityWhenTaskRestartIsAmbiguous(
 		},
 	}}
 
-	identity, err := broker.StartFreshSession(runContext{EventsPath: filepath.Join(dir, "events.jsonl")}, scenarioConfig{})
+	identity, err := broker.StartFreshSession(runContext{EventsPath: filepath.Join(dir, "events.jsonl"), HostLock: ownedTestHostLock}, scenarioConfig{})
 	if err == nil || !strings.Contains(err.Error(), "ssh connection lost after task start") {
 		t.Fatalf("StartFreshSession error = %v, want ambiguous task restart failure", err)
 	}
