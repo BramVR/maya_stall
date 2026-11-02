@@ -82,6 +82,7 @@ The common defect here is a change that works on the path tested and is missing 
 - Go work: format changed files, run focused tests, then `go test -race ./...` and `go vet ./...` before broad handoff.
 - Python helper work: run `python -m pytest helpers/python/tests` when pytest is available.
 - Docs work: run `scripts/check-docs.sh`.
+- Host Lock, run retention, Run queue, or Run Ledger work: check the matching TLA+ model in `verification/` with its `.agents/skills/verify-*` skill (`verify-host-lock-protocol`, `verify-remote-host-lock`, `verify-local-host-lock`, `verify-run-retention`, `verify-embedded-ledger`, `verify-run-queue`, `verify-run-ledger`). Each skill lists the covered files, its `check.sh`, the expected output, and open known findings.
 - Proof/workflow/Windows-helper work: run `node --test scripts/proof/*.test.mjs scripts/windows/*.test.mjs` and `node scripts/proof/audit-live-policy.mjs`; validate workflow changes with the repository's pinned `actionlint` path.
 - Before PR closeout, read `docs/agents/pr-merge.md` and generate the Proof Manifest with `scripts/proof/select-proof.mjs`. If it reports `live_maya_required=true`, fake/local gates are necessary but insufficient: the protected real-Maya gate must pass and must not skip.
 - If the active issue claims production-ready parallel execution, follow its proof requirements and the documented two-Host live proof; one fixture cannot prove isolated concurrency.
@@ -117,7 +118,7 @@ Core domain contracts stay host-neutral. SSH, Windows desktop, Session Broker, f
 - Read `CONTEXT.md`, then the relevant ADRs in `docs/adr/`. Read `VISION.md` for the enduring product boundary and `docs/prd/0001-maya-stall-v1.md` when slicing v1 work.
 - Read `docs/source-map.md` before assuming file ownership. Confirm with `rg --files`, targeted `rg`, imports, callers, and tests.
 - CLI entrypoint: `cmd/maya-stall`; implementation and Go tests: `internal/cli`; optional Python helper: `helpers/python/maya_stall`; helper tests: `helpers/python/tests`.
-- User docs: `docs/`; command reference: `docs/commands`; setup runbooks: `docs/setup`; agent runbooks: `docs/agents`; architecture decisions: `docs/adr`; proof policy/scripts: `proof/` and `scripts/proof`.
+- User docs: `docs/`; command reference: `docs/commands`; setup runbooks: `docs/setup`; agent runbooks: `docs/agents`; architecture decisions: `docs/adr`; proof policy/scripts: `proof/` and `scripts/proof`; formal-verification models: `verification/`.
 - Generated output such as `bin/`, `dist/`, `.maya-stall/state/`, and `artifacts/maya-stall/` is not source and should not be hand-edited.
 - When behavior or ownership moves, update the doc that owns it. Do not duplicate a changing source map in this file.
 
